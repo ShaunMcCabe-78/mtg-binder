@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -825,7 +825,18 @@ $("#btnPrefetch").onclick = async () => {
 
 /* ---------- install + updates ---------- */
 const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-if (!standalone && /iPhone|iPad|iPod/.test(navigator.userAgent) && !lsGet("mtg.hideInstall", false)) $("#installBanner").hidden = false;
+const ua = navigator.userAgent, isIOS = /iPhone|iPad|iPod/.test(ua), isAndroid = /Android/.test(ua), isSamsung = /SamsungBrowser/.test(ua);
+if (!standalone && (isIOS || isAndroid) && !lsGet("mtg.hideInstall", false)) {
+  if (isAndroid) $("#installText").innerHTML = isSamsung
+    ? "Install: tap <b>≡</b> (menu) → <b>Add page to</b> → <b>Home screen</b>, then open Binder from your Home screen."
+    : "Install: tap <b>⋮</b> (menu) → <b>Add to Home screen</b> or <b>Install app</b>, then open Binder from your Home screen.";
+  $("#installBanner").hidden = false;
+}
+// Chrome and Samsung Internet on Android can show their own install prompt.
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; $("#btnInstall").hidden = false; if (!lsGet("mtg.hideInstall", false)) $("#installBanner").hidden = false; });
+$("#btnInstall").onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) {} installPrompt = null; $("#installBanner").hidden = true; };
+window.addEventListener("appinstalled", () => { $("#installBanner").hidden = true; });
 $("#btnHideInstall").onclick = () => { lsSet("mtg.hideInstall", true); $("#installBanner").hidden = true; };
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").then(reg => {

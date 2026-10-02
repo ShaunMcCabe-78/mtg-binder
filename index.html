@@ -163,7 +163,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
     <span class="count" id="hdrCount">0 cards</span>
   </header>
   <div class="banner" id="updateBanner" hidden><span class="small">A new version of the app is ready.</span><button class="primary" id="btnUpdate">Update</button></div>
-  <div class="banner" id="installBanner" hidden><span class="small">Install: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Binder from your Home Screen.</span><button class="ghost" id="btnHideInstall" aria-label="Hide">✕</button></div>
+  <div class="banner" id="installBanner" hidden><span class="small" id="installText">Install: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Binder from your Home Screen.</span><button class="primary" id="btnInstall" hidden>Install</button><button class="ghost" id="btnHideInstall" aria-label="Hide">✕</button></div>
 
   <!-- SCAN -->
   <section class="pane" id="pane-scan">

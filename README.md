@@ -2,7 +2,12 @@
 
 A phone app for Magic: The Gathering players. It scans your cards, keeps your collection on your phone, and builds decks from the cards you own.
 
-**Install:** open https://shaunmccabe-78.github.io/mtg-binder/ in Safari, tap **Share → Add to Home Screen**, then open **Binder** from your Home Screen.
+**Install:** open https://shaunmccabe-78.github.io/mtg-binder/ on your phone.
+- iPhone (Safari): tap **Share → Add to Home Screen**.
+- Android (Chrome): tap **⋮ → Install app** (or Add to Home screen).
+- Samsung Internet: tap **≡ → Add page to → Home screen**.
+
+Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 
 ## What it does
 - **Scanning:** photograph a stack of overlapped cards so only the name bars show. The text is read on the phone (Tesseract) and each name is checked against a built-in list of every Magic card (`cards.json`). Portrait or landscape photos both work.
