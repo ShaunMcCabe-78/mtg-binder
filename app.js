@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -413,7 +413,7 @@ $("#btnPasteAdd").onclick = () => {
     if (!line || line.startsWith("#") || /^(deck|sideboard|commander|companion|maybeboard|about|name .*)$/i.test(line)) continue;
     const m = line.match(/^(\d+)\s*x?\s+(.+)$/i);
     let qty = 1, name = line; if (m) { qty = parseInt(m[1], 10) || 1; name = m[2]; }
-    name = name.replace(/\s*\([A-Z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
+    name = name.replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\([A-Z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
     if (!name) continue;
     const can = matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name);
     items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined });
@@ -615,7 +615,7 @@ Reply with ONLY this JSON:
   buildCtl = new AbortController();
   try {
     const res = await askClaudeJSON(prompt, 8000, false, buildCtl.signal);
-    S.deck = validateDeck(res, S.fmt); S.deck.builtBy = "Claude"; S.deck.from = S.buildFrom === "all" ? "all collections" : colName(S.buildFrom);
+    S.deck = validateDeck(res, S.fmt); S.deck.builtBy = "Claude"; S.deck.from = S.buildFrom === "all" ? "all collections" : colName(S.buildFrom); S.deck.fromId = S.buildFrom;
     renderDeck(); $("#deckOut").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     if (e && e.name === "AbortError") {}
@@ -626,7 +626,7 @@ Reply with ONLY this JSON:
     }
   } finally { $("#btnBuild").disabled = false; $("#buildStatus").hidden = true; buildCtl = null; }
 };
-function finishDeck(d, fmt) { return Object.assign({ fixes: [], fmt, saved: false }, d, { fmt, fixes: [], from: S.buildFrom === "all" ? "all collections" : colName(S.buildFrom) }); }
+function finishDeck(d, fmt) { return Object.assign({ fixes: [], fmt, saved: false }, d, { fmt, fixes: [], from: S.buildFrom === "all" ? "all collections" : colName(S.buildFrom), fromId: S.buildFrom }); }
 function validateDeck(res, fmt) {
   const f = FORMATS[fmt]; const fixes = []; const OWN = merged(S.buildFrom);
   const cards = []; const seen = {};
@@ -672,6 +672,29 @@ function deckText(d) {
   Object.entries(d.lands).forEach(([n, q]) => lines.push(`${q} ${n}`));
   return lines.join("\n");
 }
+/* ---------- leftovers: cards you own that the deck doesn't use ---------- */
+const COLOR_GROUPS = [["W", "White"], ["U", "Blue"], ["B", "Black"], ["R", "Red"], ["G", "Green"], ["M", "Multicolor"], ["C", "Colorless"], ["L", "Lands"], ["?", "Unknown color"]];
+function colorWords(ci) { if (!ci) return "Unknown"; const cs = colorsOf(ci); if (cs.length) return cs.map(c => COLOR_NAMES[c]).join(", "); return mainType(ci.t) === "land" ? "Land" : "Colorless"; }
+function leftovers(d) {
+  const scope = d.fromId && (d.fromId === "all" || S.cols[d.fromId]) ? d.fromId : "all";
+  const own = merged(scope), used = {};
+  for (const c of d.cards) used[keyOf(c.name)] = (used[keyOf(c.name)] || 0) + c.qty;
+  const byGroup = {};
+  for (const [k, c] of Object.entries(own)) {
+    if (BASIC_SET.has(k)) continue;
+    const left = c.qty - (used[k] || 0); if (left <= 0) continue;
+    const ci = info(c.name); const cs = ci ? colorsOf(ci) : [];
+    const g = !ci ? "?" : cs.length > 1 ? "M" : cs.length === 1 ? cs[0] : mainType(ci.t) === "land" ? "L" : "C";
+    (byGroup[g] = byGroup[g] || []).push({ name: c.name, qty: left, cost: ci ? ci.c : "", type: ci ? ci.t : "", cmc: ci ? ci.v : 0, colors: colorWords(ci) });
+  }
+  const groups = COLOR_GROUPS.filter(([g]) => byGroup[g]).map(([g, label]) => { const cards = byGroup[g].sort((a, b) => a.cmc - b.cmc || a.name.localeCompare(b.name)); return { label, cards, n: cards.reduce((a, c) => a + c.qty, 0) }; });
+  return { groups, total: groups.reduce((a, g) => a + g.n, 0), from: scope === "all" ? "all collections" : colName(scope) };
+}
+function leftoverText(d, lo) {
+  const out = [`# Not in "${d.name}" (from ${lo.from}): ${lo.total} cards`];
+  for (const g of lo.groups) { out.push("", `## ${g.label} (${g.n})`); for (const c of g.cards) out.push(`${c.qty} ${c.name} [${c.colors}]`); }
+  return out.join("\n");
+}
 function renderDeck() {
   const d = S.deck; const out = $("#deckOut"); if (!d) { out.innerHTML = ""; return; }
   const groups = {}; d.cards.forEach(c => { const g = mainType(c.type); (groups[g] = groups[g] || []).push(c); });
@@ -696,10 +719,17 @@ function renderDeck() {
       basics.map(([nm, q]) => `<div class="drow"><span class="q">${q}</span><span class="nm"><b>${esc(nm)}</b></span><span class="small muted">basic</span></div>`).join("") + `</div></div>`;
   }
   if ((d.howToPlay && d.howToPlay.length) || d.notes) html += `<div class="panel prose">${d.howToPlay.length ? `<h3>How to play it</h3><ul>${d.howToPlay.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}${d.notes ? `<h3>Notes</h3><p>${esc(d.notes)}</p>` : ""}</div>`;
+  const lo = leftovers(d);
+  html += `<details class="panel" id="leftDeck"><summary>Cards not in this deck (${lo.total})</summary>
+    <p class="small muted">Everything you own in ${esc(lo.from)} that this deck doesn't use, grouped by color. Basic lands aren't listed.</p>
+    ${lo.groups.length ? lo.groups.map(g => `<div class="group"><h3>${esc(g.label)} (${g.n})</h3><div class="list">${g.cards.map(c => `<div class="drow"><span class="q">${c.qty}</span><span class="nm"><b>${esc(c.name)}</b></span>${costHTML(c.cost)}<span class="why">${esc(c.type || "")}</span></div>`).join("")}</div></div>`).join("") : `<p class="muted">This deck uses every card you own there.</p>`}
+    ${lo.groups.length ? `<button id="btnCopyLeft">Copy leftover list with colors</button>` : ""}
+  </details>`;
   html += `<div class="row"><button class="primary" id="btnCopyDeck" style="flex:1">Copy deck list</button><button id="btnSaveDeck"${d.saved ? " disabled" : ""}>${d.saved ? "Saved" : "Save deck"}</button></div>
   <p class="small muted">The copied list pastes straight into MTG Arena, Moxfield or Archidekt.</p>`;
   out.innerHTML = `<div class="stack" style="gap:16px">${html}</div>`;
   $("#btnCopyDeck").onclick = () => copyText(deckText(d));
+  if ($("#btnCopyLeft")) $("#btnCopyLeft").onclick = () => copyText(leftoverText(d, lo));
   // Renaming: typing updates this deck, and the saved copy if it has been saved.
   let nameTimer = null;
   $("#deckName").addEventListener("input", e => {
