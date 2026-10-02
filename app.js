@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -681,7 +681,7 @@ function renderDeck() {
   const nq = nonland.reduce((a, c) => a + c.qty, 0);
   const avg = nq ? (nonland.reduce((a, c) => a + c.cmc * c.qty, 0) / nq).toFixed(1) : "–";
   let html = `<div class="panel">
-    <div class="deckhead"><span class="arch">${esc(d.archetype)} · ${FORMATS[d.fmt].label}${d.builtBy ? " · by " + esc(d.builtBy) : ""}</span>${d.from ? `<span class="small muted">From: ${esc(d.from)}</span>` : ""}<h2>${esc(d.name)}</h2>${d.commander ? `<p><b>Commander:</b> ${esc(d.commander)}</p>` : ""}<p class="muted">${esc(d.summary)}</p></div>
+    <div class="deckhead"><span class="arch">${esc(d.archetype)} · ${FORMATS[d.fmt].label}${d.builtBy ? " · by " + esc(d.builtBy) : ""}</span>${d.from ? `<span class="small muted">From: ${esc(d.from)}</span>` : ""}<label class="field" style="gap:4px"><span class="small muted">Deck name</span><input type="text" id="deckName" class="deckname" value="${esc(d.name)}" maxlength="60" autocomplete="off" autocapitalize="words" aria-label="Deck name"></label>${d.commander ? `<p><b>Commander:</b> ${esc(d.commander)}</p>` : ""}<p class="muted">${esc(d.summary)}</p></div>
     <div class="stats"><div class="stat"><b>${d.total}</b><span>cards</span></div><div class="stat"><b>${landCount}</b><span>lands</span></div><div class="stat"><b>${avg}</b><span>avg mana value</span></div></div>
     <div class="curve"><h3>Mana curve <span class="small">(${creatures} creatures)</span></h3>${curveSVG(d.cards)}</div>
     ${d.fixes && d.fixes.length ? `<ul class="tips" style="color:var(--warn)">${d.fixes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
@@ -700,15 +700,26 @@ function renderDeck() {
   <p class="small muted">The copied list pastes straight into MTG Arena, Moxfield or Archidekt.</p>`;
   out.innerHTML = `<div class="stack" style="gap:16px">${html}</div>`;
   $("#btnCopyDeck").onclick = () => copyText(deckText(d));
-  $("#btnSaveDeck").onclick = () => { if (d.saved) return; d.saved = true; d.id = "d" + Date.now(); S.decks.unshift(JSON.parse(JSON.stringify(d))); S.decks = S.decks.slice(0, 40); persistDecks(); renderSaved(); renderDeck(); toast("Deck saved"); };
+  // Renaming: typing updates this deck, and the saved copy if it has been saved.
+  let nameTimer = null;
+  $("#deckName").addEventListener("input", e => {
+    d.name = e.target.value.trim() || "Untitled deck";
+    clearTimeout(nameTimer);
+    nameTimer = setTimeout(() => { const sv = d.id && S.decks.find(x => x.id === d.id); if (sv) { sv.name = d.name; persistDecks(); renderSaved(); } }, 400);
+  });
+  $("#deckName").addEventListener("keydown", e => { if (e.key === "Enter") e.target.blur(); });
+  $("#btnSaveDeck").onclick = () => { if (d.saved) return; d.name = $("#deckName").value.trim() || d.name; d.saved = true; d.id = "d" + Date.now(); S.decks.unshift(JSON.parse(JSON.stringify(d))); S.decks = S.decks.slice(0, 40); persistDecks(); renderSaved(); renderDeck(); toast("Deck saved"); };
 }
 function renderSaved() {
   $("#savedBox").hidden = !S.decks.length;
-  $("#savedList").innerHTML = S.decks.map((d, i) => `<div class="srow"><div><b>${esc(d.name)}</b><div class="small muted">${esc(d.archetype)} · ${FORMATS[d.fmt] ? FORMATS[d.fmt].label : ""} · ${d.total} cards</div></div><div class="row" style="flex-wrap:nowrap"><button data-open="${i}">Open</button><button class="ghost" data-del="${i}" aria-label="Delete ${esc(d.name)}">✕</button></div></div>`).join("");
+  $("#savedList").innerHTML = S.decks.map((d, i) => `<div class="srow"><div><b>${esc(d.name)}</b><div class="small muted">${esc(d.archetype)} · ${FORMATS[d.fmt] ? FORMATS[d.fmt].label : ""} · ${d.total} cards</div></div><div class="row" style="flex-wrap:nowrap"><button data-open="${i}">Open</button><button class="ghost" data-ren="${i}" aria-label="Rename ${esc(d.name)}">Rename</button><button class="ghost" data-del="${i}" aria-label="Delete ${esc(d.name)}">✕</button></div></div>`).join("");
 }
 $("#savedList").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.open != null) { S.deck = JSON.parse(JSON.stringify(S.decks[+b.dataset.open])); S.deck.saved = true; renderDeck(); $("#deckOut").scrollIntoView({ behavior: "smooth" }); }
+  if (b.dataset.open != null || b.dataset.ren != null) {
+    S.deck = JSON.parse(JSON.stringify(S.decks[+(b.dataset.open ?? b.dataset.ren)])); S.deck.saved = true; renderDeck(); $("#deckOut").scrollIntoView({ behavior: "smooth" });
+    if (b.dataset.ren != null) setTimeout(() => { const el = $("#deckName"); if (el) { el.focus(); el.select(); } }, 350);
+  }
   if (b.dataset.del != null) { S.decks.splice(+b.dataset.del, 1); persistDecks(); renderSaved(); }
 });
 
