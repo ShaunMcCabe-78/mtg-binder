@@ -146,6 +146,13 @@ nav.tabs button[aria-selected="true"] .lbl{font-weight:700}
 .cardimg img{width:100%;height:100%;object-fit:cover;display:block}
 .oracle{white-space:pre-wrap;font-size:.95rem}
 details>summary{cursor:pointer;font-weight:700}
+.colbar{display:flex;gap:8px;align-items:center}
+.colbar select{flex:1;min-width:0;font-weight:700}
+.colbar .lbl{font-size:.88rem;color:var(--muted);white-space:nowrap}
+.target{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.where{display:flex;flex-direction:column;gap:6px}
+.where .wrow{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.where .wrow span{min-width:0;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -162,6 +169,10 @@ details>summary{cursor:pointer;font-weight:700}
     <div class="stack">
       <h2>Add cards from photos</h2>
       <p class="muted">Stack your cards so only the names show, then take a photo. The names are read and checked against every Magic card on your phone, and you confirm the list before anything is added.</p>
+      <div class="target">
+        <div class="colbar"><span class="lbl">Saving to</span><select id="targetSel" aria-label="Collection to save scanned cards to"></select><button id="btnNewTarget">+ New</button></div>
+        <div class="row" id="newTargetBox" hidden><input type="text" id="newTargetName" placeholder="Collection name, e.g. Marvel box" style="flex:1;min-width:0" autocapitalize="sentences"><button class="primary" id="btnCreateTarget">Create</button><button class="ghost" id="btnCancelTarget">Cancel</button></div>
+      </div>
       <p class="small muted" id="dbStatus"><span class="spinner" style="display:inline-block;vertical-align:-3px;width:14px;height:14px"></span> Loading the card list…</p>
     </div>
     <label class="big-cta" id="shootLabel">
@@ -241,8 +252,20 @@ details>summary{cursor:pointer;font-weight:700}
   <section class="pane" id="pane-coll" hidden>
     <div class="stack">
       <div class="row" style="justify-content:space-between">
-        <h2>Your collection</h2>
+        <h2>Your collections</h2>
         <span class="small muted" id="collSummary"></span>
+      </div>
+      <div class="colbar"><select id="viewSel" aria-label="Collection to show"></select><button id="btnManageCol">Manage</button></div>
+      <div class="panel" id="manageBox" hidden>
+        <div class="stack" style="gap:6px"><h3>New collection</h3>
+          <div class="row"><input type="text" id="newColName" placeholder="e.g. Trade binder" style="flex:1;min-width:0" autocapitalize="sentences"><button class="primary" id="btnCreateCol">Create</button></div></div>
+        <div class="stack" id="editColBox" style="gap:6px"><h3>This collection</h3>
+          <div class="row"><input type="text" id="renameCol" style="flex:1;min-width:0" autocapitalize="sentences" aria-label="Collection name"><button id="btnRenameCol">Rename</button></div>
+          <div class="row"><span class="small">Move all its cards into</span><select id="mergeSel" style="flex:1 1 160px;min-width:0" aria-label="Collection to merge into"></select><button id="btnMergeCol">Move</button></div>
+          <button class="ghost danger" id="btnDeleteCol">Delete this collection</button>
+          <div class="panel" id="delColConfirm" hidden><p id="delColMsg"></p><div class="row"><button class="primary" id="yesDelCol">Delete</button><button id="noDelCol">Keep</button></div></div>
+        </div>
+        <p class="small muted" id="manageAllHint">Pick a single collection above to rename, merge or delete it.</p>
       </div>
       <input type="search" id="collSearch" placeholder="Search by name, type or text" autocomplete="off">
       <div class="chips" id="colorFilter"></div>
@@ -263,7 +286,8 @@ details>summary{cursor:pointer;font-weight:700}
   <section class="pane" id="pane-deck" hidden>
     <div class="stack">
       <h2>Build a deck</h2>
-      <p class="muted">Decks use only the cards in your collection. Basic lands are assumed to be on hand.</p>
+      <p class="muted">Decks use only cards you own. Basic lands are assumed to be on hand.</p>
+      <div class="colbar"><span class="lbl">Build from</span><select id="buildSel" aria-label="Collection to build from"></select></div>
     </div>
     <div class="panel">
       <h3>Format</h3>
@@ -324,8 +348,8 @@ details>summary{cursor:pointer;font-weight:700}
     </div>
     <div class="panel">
       <h3>Your data</h3>
-      <p class="small">Your collection and decks are stored only on this phone. Make a backup now and then: copy the list and keep it in a note or email it to yourself. To restore, paste it into "Paste a card list" on the Scan tab.</p>
-      <div class="row"><button id="btnBackup">Copy collection backup</button></div>
+      <p class="small">Your collections and decks are stored only on this phone. Make a backup now and then: copy it and keep it in a note or email it to yourself. To restore, paste it into "Paste a card list" on the Scan tab; each collection is recreated by name.</p>
+      <div class="row"><button id="btnBackup">Copy backup of all collections</button></div>
       <p class="small muted" id="persistStatus"></p>
     </div>
     <div class="panel">

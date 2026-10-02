@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -21,13 +21,45 @@ const TESS = {
 const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
 
 /* ---------- state + storage ---------- */
-const S = { cards: {}, decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
+const S = { cols: {}, order: [], target: "main", view: "all", buildFrom: "all", decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
 let DB = new Map();          // name -> card data
 let matcher = null;
 let extraNames = [], extraCards = {};
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { toast("Couldn't save: storage is full or blocked"); return false; } }
-function persist() { lsSet("mtg.cards", S.cards); }
+function persist() { lsSet("mtg.cols", { order: S.order, cols: S.cols }); lsSet("mtg.target", S.target); lsSet("mtg.view", S.view); lsSet("mtg.buildFrom", S.buildFrom); }
+/* ---------- collections ---------- */
+const colName = id => (S.cols[id] || {}).name || "Collection";
+function newCollection(name) {
+  name = String(name || "").trim().slice(0, 40); if (!name) return null;
+  const ex = S.order.find(id => keyOf(S.cols[id].name) === keyOf(name)); if (ex) return ex;
+  const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  S.cols[id] = { name, created: Date.now(), cards: {} }; S.order.push(id); persist(); renderColSelects(); return id;
+}
+// Cards across one collection ("id") or every collection ("all"), merged by name.
+function merged(scope) {
+  const out = {};
+  for (const id of scope === "all" ? S.order : [scope]) {
+    const col = S.cols[id]; if (!col) continue;
+    for (const [k, c] of Object.entries(col.cards)) {
+      const m = out[k] || (out[k] = { name: c.name, qty: 0, added: 0, where: {} });
+      m.qty += c.qty; m.added = Math.max(m.added, c.added || 0); m.where[id] = c.qty;
+    }
+  }
+  return out;
+}
+function colCount(id) { let n = 0; for (const c of Object.values((S.cols[id] || {}).cards || {})) n += c.qty; return n; }
+function renderColSelects() {
+  if (!S.cols[S.target]) S.target = S.order[0];
+  if (S.view !== "all" && !S.cols[S.view]) S.view = "all";
+  if (S.buildFrom !== "all" && !S.cols[S.buildFrom]) S.buildFrom = "all";
+  const opts = (sel) => S.order.map(id => `<option value="${id}"${id === sel ? " selected" : ""}>${esc(S.cols[id].name)} (${colCount(id)})</option>`).join("");
+  const allOpt = sel => `<option value="all"${sel === "all" ? " selected" : ""}>All collections (${totals().n})</option>`;
+  $("#targetSel").innerHTML = opts(S.target);
+  $("#viewSel").innerHTML = allOpt(S.view) + opts(S.view);
+  $("#buildSel").innerHTML = allOpt(S.buildFrom) + opts(S.buildFrom);
+  $("#btnAddReviewed").textContent = "Add to " + colName(S.target);
+}
 function persistDecks() { lsSet("mtg.decks", S.decks); }
 const apiKey = () => lsGet("mtg.apiKey", "");
 
@@ -47,7 +79,7 @@ async function loadDB() {
     renderDbInfo();
     // Fix up names typed or scanned before the list loaded
     let changed = false;
-    for (const [k, c] of Object.entries(S.cards)) { const can = matcher.canonical(c.name); if (can && can !== c.name) { c.name = can; changed = true; } }
+    for (const id of S.order) for (const c of Object.values(S.cols[id].cards)) { const can = matcher.canonical(c.name); if (can && can !== c.name) { c.name = can; changed = true; } }
     if (changed) persist();
     renderHeader(); if (!$("#pane-coll").hidden) renderColl();
   } catch (e) {
@@ -75,7 +107,7 @@ function colorBucket(name) {
   if (cols.length > 1) return "M"; if (cols.length === 1) return cols[0]; return "C";
 }
 function mainType(t) { return DeckBuilder.mainType(t); }
-function totals() { let n = 0, u = 0; for (const c of Object.values(S.cards)) { n += c.qty; u++; } return { n, u }; }
+function totals(scope) { let n = 0, u = 0; for (const c of Object.values(merged(scope || "all"))) { n += c.qty; u++; } return { n, u }; }
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2600); }
 async function copyText(txt) {
   try { await navigator.clipboard.writeText(txt); toast("Copied"); }
@@ -87,6 +119,7 @@ function suggHTML(list, attr) { return list.map(n => `<button data-${attr}="${es
 function showTab(name) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   ["scan", "coll", "deck", "set"].forEach(n => $("#pane-" + n).hidden = n !== name);
+  renderColSelects();
   if (name === "coll") renderColl();
   if (name === "deck") renderEngine();
   if (name === "set") renderSettings();
@@ -96,15 +129,18 @@ document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => show
 function renderHeader() { const t = totals(); $("#hdrCount").textContent = `${t.n} card${t.n === 1 ? "" : "s"} · ${t.u} unique`; }
 
 /* ---------- collection changes ---------- */
-function addToCollection(items) {
+function addToCollection(items, colId) {
   const now = Date.now();
+  const byCol = {};
   for (const c of items) {
     const name = String(c.name || "").trim(); if (!name) continue;
-    const k = keyOf(name);
-    if (S.cards[k]) { S.cards[k].qty += c.qty; S.cards[k].added = now; }
-    else S.cards[k] = { name, qty: c.qty, added: now };
+    const id = S.cols[c.col] ? c.col : S.cols[colId] ? colId : S.target;
+    const cards = S.cols[id].cards; const k = keyOf(name);
+    if (cards[k]) { cards[k].qty += c.qty; cards[k].added = now; }
+    else cards[k] = { name, qty: c.qty, added: now };
+    byCol[id] = (byCol[id] || 0) + c.qty;
   }
-  persist(); renderHeader();
+  persist(); renderHeader(); renderColSelects();
   fetchMissingDetails(items.map(i => i.name));
 }
 // Look up cards that aren't in the downloaded list (brand-new sets) on Scryfall, when online.
@@ -293,7 +329,7 @@ function renderReview(scroll) {
     const ci = info(c.name);
     return `<div class="crow rv">
       <input class="nm-edit" type="text" id="rv-${i}" data-i="${i}" value="${esc(c.name)}" aria-label="Card name" autocomplete="off">
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
       <div class="ctl stepper"><button data-dec="${i}" aria-label="Fewer">−</button><span>${c.qty}</span><button data-inc="${i}" aria-label="More">+</button></div>
       ${sug.length ? `<div class="sugg"><span class="small muted">Did you mean</span>${sug.map(s => `<button data-fix="${i}" data-name="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
     </div>`;
@@ -331,13 +367,14 @@ $("#leftList").addEventListener("click", e => {
 });
 $("#btnDiscard").onclick = () => { S.review = []; S.leftovers = []; renderReview(); };
 $("#btnAddReviewed").onclick = () => {
-  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty }));
+  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col }));
   if (!items.length) return;
-  addToCollection(items);
+  addToCollection(items, S.target);
+  const multi = items.some(i => i.col && i.col !== S.target);
   S.review = []; S.leftovers = []; renderReview();
   S.photos.forEach(p => URL.revokeObjectURL(p.url)); S.photos = []; renderPhotos();
   const n = items.reduce((a, c) => a + c.qty, 0);
-  toast(`Added ${n} card${n === 1 ? "" : "s"} to your collection`);
+  toast(`Added ${n} card${n === 1 ? "" : "s"} to ${multi ? "your collections" : colName(S.target)}`);
 };
 $("#btnAskClaudeLeft").onclick = async () => {
   const b = $("#btnAskClaudeLeft"); b.disabled = true; b.textContent = "Asking Claude…";
@@ -361,28 +398,41 @@ $("#manualSugg").onclick = e => { const b = e.target.closest("button[data-pick]"
 $("#btnManualAdd").onclick = () => {
   const raw = $("#manualName").value.trim(); if (!raw) return;
   const name = (matcher && (matcher.canonical(raw) || (matcher.matchLine(raw) || {}).name)) || raw;
-  addToCollection([{ name, qty: mQty }]);
-  toast(`Added ${mQty} × ${name}${matcher && !matcher.isCard(name) ? " (not in the card list)" : ""}`);
+  addToCollection([{ name, qty: mQty }], S.target);
+  toast(`Added ${mQty} × ${name} to ${colName(S.target)}${matcher && !matcher.isCard(name) ? " (not in the card list)" : ""}`);
   $("#manualName").value = ""; $("#manualSugg").innerHTML = ""; mQty = 1; $("#mQty").textContent = 1;
 };
 $("#manualName").addEventListener("keydown", e => { if (e.key === "Enter") $("#btnManualAdd").click(); });
 $("#btnPasteAdd").onclick = () => {
   const text = $("#pasteList").value; if (!text.trim()) return;
-  const items = [];
+  const items = []; let col = null;
   for (let line of text.split(/\r?\n/)) {
-    line = line.trim(); if (!line || /^(deck|sideboard|commander|companion|maybeboard|about|name .*)$/i.test(line)) continue;
+    line = line.trim();
+    const h = /^#+\s*collection:\s*(.+)$/i.exec(line);
+    if (h) { col = newCollection(h[1]); continue; }
+    if (!line || line.startsWith("#") || /^(deck|sideboard|commander|companion|maybeboard|about|name .*)$/i.test(line)) continue;
     const m = line.match(/^(\d+)\s*x?\s+(.+)$/i);
     let qty = 1, name = line; if (m) { qty = parseInt(m[1], 10) || 1; name = m[2]; }
     name = name.replace(/\s*\([A-Z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
     if (!name) continue;
     const can = matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name);
-    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name) });
+    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined });
   }
   if (!items.length) return;
-  for (const it of items) { const ex = S.review.find(r => r.name === it.name); if (ex) ex.qty += it.qty; else S.review.push(it); }
+  for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) ex.qty += it.qty; else S.review.push(it); }
   $("#pasteList").value = "";
   renderReview(true);
 };
+
+$("#targetSel").onchange = e => { S.target = e.target.value; persist(); renderColSelects(); renderReview(); toast("Now saving to " + colName(S.target)); };
+$("#btnNewTarget").onclick = () => { $("#newTargetBox").hidden = false; $("#newTargetName").focus(); };
+$("#btnCancelTarget").onclick = () => { $("#newTargetBox").hidden = true; $("#newTargetName").value = ""; };
+$("#btnCreateTarget").onclick = () => {
+  const id = newCollection($("#newTargetName").value); if (!id) { $("#newTargetName").focus(); return; }
+  S.target = id; persist(); renderColSelects(); renderReview();
+  $("#newTargetBox").hidden = true; $("#newTargetName").value = ""; toast("Now saving to " + colName(id));
+};
+$("#newTargetName").addEventListener("keydown", e => { if (e.key === "Enter") $("#btnCreateTarget").click(); });
 
 /* ---------- COLLECTION ---------- */
 const FILTERS = [["W", "White"], ["U", "Blue"], ["B", "Black"], ["R", "Red"], ["G", "Green"], ["M", "Multi"], ["C", "Colorless"], ["L", "Lands"]];
@@ -391,68 +441,114 @@ $("#colorFilter").onclick = e => { const b = e.target.closest("button"); if (!b)
 $("#collSearch").oninput = () => renderColl();
 $("#collSort").onchange = () => renderColl();
 function renderColl() {
-  const body = $("#collBody"); const all = Object.entries(S.cards);
-  const t = totals(); $("#collSummary").textContent = `${t.n} cards · ${t.u} unique`;
+  renderColSelects();
+  const body = $("#collBody"); const view = S.view; const all = Object.entries(merged(view));
+  const t = totals(view); $("#collSummary").textContent = `${t.n} cards · ${t.u} unique`;
+  renderManage();
   if (!all.length) {
-    body.innerHTML = `<div class="empty"><h2>No cards yet</h2>
-      <ol><li>Go to <b>Scan</b> and photograph a stack of cards.</li><li>Check the names, then add them.</li><li>Open <b>Deck</b> to build from what you own.</li></ol>
-      <div class="row"><button class="primary" id="goScan">Scan cards</button></div></div>`;
-    $("#goScan").onclick = () => showTab("scan"); return;
+    body.innerHTML = view === "all" && !totals().n ? `<div class="empty"><h2>No cards yet</h2>
+      <ol><li>On <b>Scan</b>, pick or create the collection to save to.</li><li>Photograph a stack of cards, check the names, then add them.</li><li>Open <b>Deck</b> to build from what you own.</li></ol>
+      <div class="row"><button class="primary" id="goScan">Scan cards</button></div></div>`
+      : `<div class="empty"><h2>${esc(colName(view))} is empty</h2><p class="muted">Choose it under <b>Saving to</b> on the Scan tab, then scan or type cards in.</p><div class="row"><button class="primary" id="goScan">Scan into ${esc(colName(view))}</button></div></div>`;
+    $("#goScan").onclick = () => { if (view !== "all") { S.target = view; persist(); renderColSelects(); } showTab("scan"); }; return;
   }
   const q = keyOf($("#collSearch").value); const sort = $("#collSort").value;
   let rows = all.filter(([k, c]) => { const ci = info(c.name) || {}; return (!q || k.includes(q) || (ci.t || "").toLowerCase().includes(q) || (ci.o || "").toLowerCase().includes(q)) && (!S.filter.size || S.filter.has(colorBucket(c.name))); });
   const mv = c => (info(c.name) || {}).v || 0;
   rows.sort((a, b) => sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
-  body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); return `
+  const single = view !== "all";
+  body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); return `
     <div class="crow">
       <button class="nm" data-open="${esc(k)}">${esc(c.name)}</button>
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}</div>
-      <div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      ${single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
+        : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
     </div>`; }).join("")}</div>` : `<p class="muted">No cards match.</p>`;
 }
 $("#collBody").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.open) { openCard(b.dataset.open); return; }
-  const k = b.dataset.cinc ?? b.dataset.cdec; if (k == null || !S.cards[k]) return;
-  if (b.dataset.cinc != null) S.cards[k].qty++; else { S.cards[k].qty--; if (S.cards[k].qty <= 0) delete S.cards[k]; }
+  const k = b.dataset.cinc ?? b.dataset.cdec; const col = S.cols[S.view]; if (k == null || !col || !col.cards[k]) return;
+  if (b.dataset.cinc != null) col.cards[k].qty++; else { col.cards[k].qty--; if (col.cards[k].qty <= 0) delete col.cards[k]; }
   persist(); renderHeader(); renderColl();
 });
-const collText = () => Object.values(S.cards).sort((a, b) => a.name.localeCompare(b.name)).map(c => `${c.qty} ${c.name}`).join("\n");
-$("#btnCopyColl").onclick = () => copyText(collText());
+// Text backup: one "# Collection:" header per collection, so pasting it back recreates them.
+function collText(scope) {
+  return (scope === "all" ? S.order : [scope]).filter(id => Object.keys(S.cols[id].cards).length).map(id =>
+    `# Collection: ${S.cols[id].name}\n` + Object.values(S.cols[id].cards).sort((a, b) => a.name.localeCompare(b.name)).map(c => `${c.qty} ${c.name}`).join("\n")).join("\n\n");
+}
+$("#btnCopyColl").onclick = () => copyText(collText(S.view));
 
-/* ---------- card sheet (details, rename, remove) ---------- */
+/* ---------- managing collections ---------- */
+$("#viewSel").onchange = e => { S.view = e.target.value; persist(); $("#delColConfirm").hidden = true; renderColl(); };
+$("#btnManageCol").onclick = () => { $("#manageBox").hidden = !$("#manageBox").hidden; renderManage(); };
+function renderManage() {
+  const single = S.view !== "all";
+  $("#editColBox").hidden = !single; $("#manageAllHint").hidden = single;
+  if (single) {
+    $("#renameCol").value = colName(S.view);
+    const others = S.order.filter(id => id !== S.view);
+    $("#mergeSel").innerHTML = others.map(id => `<option value="${id}">${esc(S.cols[id].name)}</option>`).join("");
+    $("#mergeSel").parentElement.hidden = !others.length;
+    $("#btnDeleteCol").hidden = S.order.length < 2;
+  }
+}
+$("#btnCreateCol").onclick = () => { const id = newCollection($("#newColName").value); if (!id) { $("#newColName").focus(); return; } $("#newColName").value = ""; S.view = id; persist(); renderColl(); toast("Created " + colName(id)); };
+$("#newColName").addEventListener("keydown", e => { if (e.key === "Enter") $("#btnCreateCol").click(); });
+$("#btnRenameCol").onclick = () => { const v = $("#renameCol").value.trim().slice(0, 40); if (!v || !S.cols[S.view]) return; S.cols[S.view].name = v; persist(); renderColl(); toast("Renamed"); };
+$("#btnMergeCol").onclick = () => {
+  const from = S.cols[S.view], toId = $("#mergeSel").value, to = S.cols[toId]; if (!from || !to) return;
+  for (const [k, c] of Object.entries(from.cards)) { if (to.cards[k]) to.cards[k].qty += c.qty; else to.cards[k] = { ...c }; }
+  const n = colCount(S.view); from.cards = {}; persist(); toast(`Moved ${n} card${n === 1 ? "" : "s"} to ${to.name}`); renderColl();
+};
+$("#btnDeleteCol").onclick = () => { const n = colCount(S.view); $("#delColMsg").textContent = `Delete "${colName(S.view)}"` + (n ? ` and the ${n} card${n === 1 ? "" : "s"} in it? To keep the cards, move them into another collection first.` : "?"); $("#delColConfirm").hidden = false; };
+$("#noDelCol").onclick = () => $("#delColConfirm").hidden = true;
+$("#yesDelCol").onclick = () => {
+  if (S.order.length < 2) return; const id = S.view, name = colName(id);
+  delete S.cols[id]; S.order = S.order.filter(x => x !== id); S.view = "all";
+  $("#delColConfirm").hidden = true; persist(); renderHeader(); renderColl(); toast("Deleted " + name);
+};
+
+/* ---------- card sheet (details, copies per collection, rename, remove) ---------- */
 function openCard(k) {
-  const c = S.cards[k]; if (!c) return;
+  const c = merged("all")[k]; if (!c) return;
   const ci = info(c.name);
   const img = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(c.name)}&format=image&version=normal`;
+  const qty = {}; for (const id of S.order) qty[id] = c.where[id] || 0;
+  const whereHTML = () => S.order.map(id => `<div class="wrow"><span>${esc(S.cols[id].name)}</span><div class="stepper"><button data-wdec="${id}" aria-label="Fewer in ${esc(S.cols[id].name)}">−</button><span>${qty[id]}</span><button data-winc="${id}" aria-label="More in ${esc(S.cols[id].name)}">+</button></div></div>`).join("");
   $("#sheet").innerHTML = `<div class="grab"></div>
     <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><h2 style="min-width:0">${esc(c.name)}</h2><button class="ghost" id="shClose" aria-label="Close">✕</button></div>
     <div class="cardimg" id="shImg">${navigator.onLine ? `<img src="${img}" alt="${esc(c.name)}" loading="lazy">` : "Picture needs internet"}</div>
     ${ci ? `<div class="stack" style="gap:6px"><div class="row">${costHTML(ci.c)}<span class="small muted">mana value ${ci.v}</span></div><b>${esc(ci.t)}${ci.p ? " · " + esc(ci.p) : ""}${ci.l ? " · loyalty " + esc(ci.l) : ""}</b>${ci.o ? `<p class="oracle">${esc(ci.o)}</p>` : ""}</div>` : `<p class="note">This name isn't in the card list. If it's misspelled, rename it below.</p>`}
-    <div class="row"><span>Copies</span><div class="stepper"><button id="shDec" aria-label="Fewer">−</button><span id="shQty">${c.qty}</span><button id="shInc" aria-label="More">+</button></div></div>
+    <div class="stack" style="gap:6px"><h3>Copies in each collection</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another.</p></div>
     <label class="field">Rename / correct this card<input type="text" id="shName" value="${esc(c.name)}" autocomplete="off" autocapitalize="words"></label>
     <div class="sugg" id="shSugg"></div>
-    <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove from collection</button></div>
-    <div class="panel" id="shDelConfirm" hidden><p>Remove all ${c.qty} cop${c.qty === 1 ? "y" : "ies"} of ${esc(c.name)}?</p><div class="row"><button class="primary" id="shYes">Remove</button><button id="shNo">Keep</button></div></div>
+    <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove everywhere</button></div>
+    <div class="panel" id="shDelConfirm" hidden><p>Remove all ${c.qty} cop${c.qty === 1 ? "y" : "ies"} of ${esc(c.name)} from every collection?</p><div class="row"><button class="primary" id="shYes">Remove</button><button id="shNo">Keep</button></div></div>
     <a class="small" href="https://scryfall.com/search?q=${encodeURIComponent('!"' + c.name + '"')}" target="_blank" rel="noopener">Open on Scryfall</a>`;
   $("#sheetBg").hidden = false;
   const im = $("#shImg img"); if (im) im.onerror = () => { $("#shImg").textContent = "No picture available"; };
-  let qty = c.qty;
   $("#shClose").onclick = closeSheet;
-  $("#shDec").onclick = () => { qty = Math.max(1, qty - 1); $("#shQty").textContent = qty; };
-  $("#shInc").onclick = () => { qty++; $("#shQty").textContent = qty; };
+  $("#shWhere").onclick = e => { const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.winc) qty[b.dataset.winc]++; else if (b.dataset.wdec) qty[b.dataset.wdec] = Math.max(0, qty[b.dataset.wdec] - 1); else return;
+    $("#shWhere").innerHTML = whereHTML(); };
   $("#shName").oninput = () => { const v = $("#shName").value; $("#shSugg").innerHTML = matcher && v.trim().length >= 2 && !matcher.isCard(v) ? suggHTML(matcher.suggest(v, 5), "pick") : ""; };
   $("#shSugg").onclick = e => { const b = e.target.closest("button[data-pick]"); if (!b) return; $("#shName").value = b.dataset.pick; $("#shSugg").innerHTML = ""; };
   $("#shSave").onclick = () => {
     const raw = $("#shName").value.trim() || c.name;
     const name = (matcher && matcher.canonical(raw)) || raw; const nk = keyOf(name);
-    if (nk !== k) { delete S.cards[k]; if (S.cards[nk]) S.cards[nk].qty += qty; else S.cards[nk] = { name, qty, added: c.added }; fetchMissingDetails([name]); }
-    else { c.name = name; c.qty = qty; }
+    for (const id of S.order) {
+      const cards = S.cols[id].cards; const old = cards[k]; delete cards[k];
+      const q = qty[id]; if (q <= 0) continue;
+      if (nk !== k && cards[nk]) cards[nk].qty += q;
+      else cards[nk] = { name, qty: q, added: old ? old.added : Date.now() };
+    }
+    if (nk !== k) fetchMissingDetails([name]);
     persist(); renderHeader(); renderColl(); closeSheet(); toast("Saved");
   };
   $("#shDel").onclick = () => $("#shDelConfirm").hidden = false;
   $("#shNo").onclick = () => $("#shDelConfirm").hidden = true;
-  $("#shYes").onclick = () => { delete S.cards[k]; persist(); renderHeader(); renderColl(); closeSheet(); toast("Removed"); };
+  $("#shYes").onclick = () => { for (const id of S.order) delete S.cols[id].cards[k]; persist(); renderHeader(); renderColl(); closeSheet(); toast("Removed"); };
 }
 function closeSheet() { $("#sheetBg").hidden = true; $("#sheet").innerHTML = ""; }
 $("#sheetBg").addEventListener("click", e => { if (e.target === $("#sheetBg")) closeSheet(); });
@@ -461,6 +557,7 @@ $("#sheetBg").addEventListener("click", e => { if (e.target === $("#sheetBg")) c
 $("#deckColors").innerHTML = ["W", "U", "B", "R", "G"].map(c => `<button class="chip" aria-pressed="false" data-c="${c}"><span class="pip ${c}">${c}</span>${COLOR_NAMES[c]}</button>`).join("");
 $("#deckColors").onclick = e => { const b = e.target.closest("button"); if (!b) return; const c = b.dataset.c; S.colors.has(c) ? S.colors.delete(c) : S.colors.add(c); b.setAttribute("aria-pressed", String(S.colors.has(c))); };
 $("#fmtSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.fmt = b.dataset.fmt; document.querySelectorAll("#fmtSeg button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); };
+$("#buildSel").onchange = e => { S.buildFrom = e.target.value; persist(); };
 $("#engineSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.engine = b.dataset.eng; lsSet("mtg.engine", S.engine); renderEngine(); };
 function renderEngine() {
   const hasKey = !!apiKey();
@@ -471,14 +568,14 @@ function renderEngine() {
 }
 
 function poolForBuild() {
-  return Object.values(S.cards).map(c => ({ name: c.name, qty: c.qty, card: info(c.name) || { n: c.name, c: "", v: 0, k: "", t: "", o: "" } }));
+  return Object.values(merged(S.buildFrom)).map(c => ({ name: c.name, qty: c.qty, card: info(c.name) || { n: c.name, c: "", v: 0, k: "", t: "", o: "" } }));
 }
 let buildCtl = null;
 $("#btnStopBuild").onclick = () => buildCtl && buildCtl.abort();
 $("#btnBuild").onclick = async () => {
   $("#buildErr").hidden = true;
-  const cards = Object.values(S.cards);
-  if (!cards.length) { $("#buildErr").textContent = "Your collection is empty. Scan some cards first."; $("#buildErr").hidden = false; return; }
+  const cards = Object.values(merged(S.buildFrom));
+  if (!cards.length) { $("#buildErr").textContent = S.buildFrom === "all" ? "Your collection is empty. Scan some cards first." : `${colName(S.buildFrom)} is empty. Pick another collection under Build from, or scan cards into it.`; $("#buildErr").hidden = false; return; }
   const style = $("#deckStyle").value;
   const useClaude = S.engine === "claude" && apiKey() && navigator.onLine;
   if (!useClaude) {
@@ -518,7 +615,7 @@ Reply with ONLY this JSON:
   buildCtl = new AbortController();
   try {
     const res = await askClaudeJSON(prompt, 8000, false, buildCtl.signal);
-    S.deck = validateDeck(res, S.fmt); S.deck.builtBy = "Claude";
+    S.deck = validateDeck(res, S.fmt); S.deck.builtBy = "Claude"; S.deck.from = S.buildFrom === "all" ? "all collections" : colName(S.buildFrom);
     renderDeck(); $("#deckOut").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     if (e && e.name === "AbortError") {}
@@ -529,15 +626,15 @@ Reply with ONLY this JSON:
     }
   } finally { $("#btnBuild").disabled = false; $("#buildStatus").hidden = true; buildCtl = null; }
 };
-function finishDeck(d, fmt) { return Object.assign({ fixes: [], fmt, saved: false }, d, { fmt, fixes: [] }); }
+function finishDeck(d, fmt) { return Object.assign({ fixes: [], fmt, saved: false }, d, { fmt, fixes: [], from: S.buildFrom === "all" ? "all collections" : colName(S.buildFrom) }); }
 function validateDeck(res, fmt) {
-  const f = FORMATS[fmt]; const fixes = [];
+  const f = FORMATS[fmt]; const fixes = []; const OWN = merged(S.buildFrom);
   const cards = []; const seen = {};
   res = res || {}; res.basicLands = res.basicLands || {};
   for (const c of Array.isArray(res.cards) ? res.cards : []) {
     if (!c || !c.name) continue; const k = keyOf(c.name);
     if (BASIC_SET.has(k)) { const bn = Object.values(BASIC_NAMES).find(n => keyOf(n) === k) || c.name; res.basicLands[bn] = (+res.basicLands[bn] || 0) + (+c.qty || 0); continue; }
-    const own = S.cards[k] || S.cards[keyOf((matcher && matcher.canonical(c.name)) || "")]; let q = Math.max(1, parseInt(c.qty, 10) || 1);
+    const own = OWN[k] || OWN[keyOf((matcher && matcher.canonical(c.name)) || "")]; let q = Math.max(1, parseInt(c.qty, 10) || 1);
     if (!own) { fixes.push(`Removed ${c.name}: not in your collection.`); continue; }
     const ok = keyOf(own.name); const already = seen[ok] || 0; const cap = Math.min(own.qty, f.maxCopies) - already;
     if (cap <= 0) continue;
@@ -546,7 +643,7 @@ function validateDeck(res, fmt) {
     const ci = info(own.name) || {};
     cards.push({ name: own.name, qty: q, type: ci.t || "", manaCost: ci.c || "", cmc: ci.v || 0, colors: colorsOf(ci), why: c.why || "" });
   }
-  if (fmt === "commander" && res.commander) { const ck = keyOf(res.commander); if (!cards.some(c => keyOf(c.name) === ck) && S.cards[ck]) { const ci = info(S.cards[ck].name) || {}; cards.unshift({ name: S.cards[ck].name, qty: 1, type: ci.t || "", manaCost: ci.c || "", cmc: ci.v || 0, colors: colorsOf(ci), why: "Your commander" }); } }
+  if (fmt === "commander" && res.commander) { const ck = keyOf(res.commander); if (!cards.some(c => keyOf(c.name) === ck) && OWN[ck]) { const ci = info(OWN[ck].name) || {}; cards.unshift({ name: OWN[ck].name, qty: 1, type: ci.t || "", manaCost: ci.c || "", cmc: ci.v || 0, colors: colorsOf(ci), why: "Your commander" }); } }
   const lands = {}; for (const [n, v] of Object.entries(res.basicLands)) { const q = parseInt(v, 10) || 0; if (q > 0) lands[n] = q; }
   let total = cards.reduce((a, c) => a + c.qty, 0) + Object.values(lands).reduce((a, b) => a + b, 0);
   const deckColors = (Array.isArray(res.colors) && res.colors.length ? res.colors : [...new Set(cards.flatMap(c => c.colors))]).filter(c => BASIC_NAMES[c]);
@@ -584,7 +681,7 @@ function renderDeck() {
   const nq = nonland.reduce((a, c) => a + c.qty, 0);
   const avg = nq ? (nonland.reduce((a, c) => a + c.cmc * c.qty, 0) / nq).toFixed(1) : "–";
   let html = `<div class="panel">
-    <div class="deckhead"><span class="arch">${esc(d.archetype)} · ${FORMATS[d.fmt].label}${d.builtBy ? " · by " + esc(d.builtBy) : ""}</span><h2>${esc(d.name)}</h2>${d.commander ? `<p><b>Commander:</b> ${esc(d.commander)}</p>` : ""}<p class="muted">${esc(d.summary)}</p></div>
+    <div class="deckhead"><span class="arch">${esc(d.archetype)} · ${FORMATS[d.fmt].label}${d.builtBy ? " · by " + esc(d.builtBy) : ""}</span>${d.from ? `<span class="small muted">From: ${esc(d.from)}</span>` : ""}<h2>${esc(d.name)}</h2>${d.commander ? `<p><b>Commander:</b> ${esc(d.commander)}</p>` : ""}<p class="muted">${esc(d.summary)}</p></div>
     <div class="stats"><div class="stat"><b>${d.total}</b><span>cards</span></div><div class="stat"><b>${landCount}</b><span>lands</span></div><div class="stat"><b>${avg}</b><span>avg mana value</span></div></div>
     <div class="curve"><h3>Mana curve <span class="small">(${creatures} creatures)</span></h3>${curveSVG(d.cards)}</div>
     ${d.fixes && d.fixes.length ? `<ul class="tips" style="color:var(--warn)">${d.fixes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
@@ -696,10 +793,10 @@ $("#btnUpdateNames").onclick = async () => {
   } catch (e) { $("#namesStatus").textContent = navigator.onLine ? "Scryfall couldn't be reached. Try again later." : "You're offline. Connect to the internet and try again."; $("#namesStatus").className = "small err"; }
   finally { b.disabled = false; }
 };
-$("#btnBackup").onclick = () => copyText(collText());
+$("#btnBackup").onclick = () => copyText(collText("all"));
 $("#btnReset").onclick = () => $("#resetConfirm").hidden = false;
 $("#noReset").onclick = () => $("#resetConfirm").hidden = true;
-$("#yesReset").onclick = () => { ["mtg.cards", "mtg.decks", "mtg.apiKey", "mtg.engine"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cards = {}; S.decks = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
+$("#yesReset").onclick = () => { ["mtg.cards", "mtg.cols", "mtg.target", "mtg.view", "mtg.buildFrom", "mtg.decks", "mtg.apiKey", "mtg.engine"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cols = { main: { name: "My collection", created: Date.now(), cards: {} } }; S.order = ["main"]; S.target = "main"; S.view = "all"; S.buildFrom = "all"; renderColSelects(); S.decks = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
 async function checkOffline() {
   try {
     const c = await caches.open("mtg-cdn"); const hits = await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0]].map(u => c.match(u)));
@@ -733,10 +830,19 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
 window.addEventListener("online", renderEngine); window.addEventListener("offline", renderEngine);
 
 /* ---------- boot ---------- */
-S.cards = lsGet("mtg.cards", {}) || {};
+const savedCols = lsGet("mtg.cols", null);
+if (savedCols && savedCols.cols && Array.isArray(savedCols.order) && savedCols.order.length) { S.cols = savedCols.cols; S.order = savedCols.order.filter(id => S.cols[id]); }
+else { S.cols = { main: { name: "My collection", created: Date.now(), cards: lsGet("mtg.cards", {}) || {} } }; S.order = ["main"]; }
+if (!S.order.length) { S.cols.main = { name: "My collection", created: Date.now(), cards: {} }; S.order = ["main"]; }
+// Cards saved by version 1.0 (before collections) go into the first collection, once.
+const legacy = lsGet("mtg.cards", null);
+if (savedCols && legacy && Object.keys(legacy).length) { const cards = S.cols[S.order[0]].cards; for (const [k, c] of Object.entries(legacy)) { if (cards[k]) cards[k].qty += c.qty; else cards[k] = c; } }
+try { localStorage.removeItem("mtg.cards"); } catch (e) {}
+S.target = lsGet("mtg.target", S.order[0]); S.view = lsGet("mtg.view", "all"); S.buildFrom = lsGet("mtg.buildFrom", "all");
+renderColSelects(); persist();
 S.decks = lsGet("mtg.decks", []) || [];
 S.engine = lsGet("mtg.engine", "claude");
 renderHeader(); renderSaved(); renderEngine();
-if (!Object.keys(S.cards).length) $("#layoutTips").open = true;
+if (!totals().n) $("#layoutTips").open = true;
 loadDB();
 })();
