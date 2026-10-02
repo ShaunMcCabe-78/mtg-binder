@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -690,9 +690,10 @@ function leftovers(d) {
   const groups = COLOR_GROUPS.filter(([g]) => byGroup[g]).map(([g, label]) => { const cards = byGroup[g].sort((a, b) => a.cmc - b.cmc || a.name.localeCompare(b.name)); return { label, cards, n: cards.reduce((a, c) => a + c.qty, 0) }; });
   return { groups, total: groups.reduce((a, g) => a + g.n, 0), from: scope === "all" ? "all collections" : colName(scope) };
 }
+// Plain "quantity name" lines (sorted by color) so deck sites such as Draftsim, Arena and Moxfield can import it.
 function leftoverText(d, lo) {
-  const out = [`# Not in "${d.name}" (from ${lo.from}): ${lo.total} cards`];
-  for (const g of lo.groups) { out.push("", `## ${g.label} (${g.n})`); for (const c of g.cards) out.push(`${c.qty} ${c.name} [${c.colors}]`); }
+  const out = [];
+  for (const g of lo.groups) for (const c of g.cards) out.push(`${c.qty} ${c.name}`);
   return out.join("\n");
 }
 function renderDeck() {
@@ -723,7 +724,7 @@ function renderDeck() {
   html += `<details class="panel" id="leftDeck"><summary>Cards not in this deck (${lo.total})</summary>
     <p class="small muted">Everything you own in ${esc(lo.from)} that this deck doesn't use, grouped by color. Basic lands aren't listed.</p>
     ${lo.groups.length ? lo.groups.map(g => `<div class="group"><h3>${esc(g.label)} (${g.n})</h3><div class="list">${g.cards.map(c => `<div class="drow"><span class="q">${c.qty}</span><span class="nm"><b>${esc(c.name)}</b></span>${costHTML(c.cost)}<span class="why">${esc(c.type || "")}</span></div>`).join("")}</div></div>`).join("") : `<p class="muted">This deck uses every card you own there.</p>`}
-    ${lo.groups.length ? `<button id="btnCopyLeft">Copy leftover list with colors</button>` : ""}
+    ${lo.groups.length ? `<button id="btnCopyLeft">Copy leftover list</button><p class="small muted">Copies one card per line, sorted by color, ready to import into Draftsim, Arena or Moxfield.</p>` : ""}
   </details>`;
   html += `<div class="row"><button class="primary" id="btnCopyDeck" style="flex:1">Copy deck list</button><button id="btnSaveDeck"${d.saved ? " disabled" : ""}>${d.saved ? "Saved" : "Save deck"}</button></div>
   <p class="small muted">The copied list pastes straight into MTG Arena, Moxfield or Archidekt.</p>`;

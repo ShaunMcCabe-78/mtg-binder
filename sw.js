@@ -1,5 +1,5 @@
 /* Offline support: keeps the app, card list and text reader on the phone. */
-const VERSION = "binder-v1.3.0";
+const VERSION = "binder-v1.3.1";
 const APP = ["./", "index.html", "app.js", "matcher.js", "builder.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png", "cards.json", "eng.traineddata.gz"];
 
