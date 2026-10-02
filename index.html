@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Magic Binder</title>
+<meta name="description" content="Scan your Magic: The Gathering cards, keep your collection on your phone, and build decks from what you own.">
+<meta name="theme-color" content="#121614">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Binder">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one-column binder app; sticky header, fixed bottom tab bar, four panes (Scan, Collection, Deck, Settings). */
+:root{
+  --bg:#eef0ec; --surface:#fbfcfa; --sunk:#e3e7e1; --line:#cdd3cb;
+  --ink:#1d2421; --muted:#5d6862; --accent:#8a5a14; --accent-ink:#fffaf0; --accent-soft:#f1e3c8;
+  --ok:#2d6a43; --warn:#9a5b00; --bad:#a8322b;
+  --pW:#f3edcf; --pWi:#3b3520; --pU:#1f6fb0; --pB:#3a3432; --pR:#c8352c; --pG:#2e7a4a; --pC:#b9b4ab; --pCi:#2a2724;
+  --display:"Alegreya SC","Palatino Linotype",Georgia,serif;
+  --body:"Alegreya Sans","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:10px; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#121614; --surface:#1a201d; --sunk:#232a26; --line:#33403a;
+  --ink:#e7ece8; --muted:#9aa69f; --accent:#e0a94a; --accent-ink:#1b1408; --accent-soft:#3a2d16;
+  --ok:#6cc08b; --warn:#e6a64a; --bad:#ef7a70;
+  --pW:#e9e1bd; --pWi:#2d2814; --pU:#3d8fd1; --pB:#6b605b; --pR:#e0574d; --pG:#4aa36c; --pC:#8d877d; --pCi:#151311;
+  color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{background:var(--bg);margin:0}
+body{color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.45;padding-inline:16px;padding-block:0 calc(84px + env(safe-area-inset-bottom,0px));-webkit-text-size-adjust:100%}
+.wrap{max-width:720px;margin:0 auto}
+img{max-width:100%}
+[hidden]{display:none!important}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);margin-inline:-16px;padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+header.top h1{font-family:var(--display);font-weight:700;font-size:1.35rem;margin:0;letter-spacing:.02em}
+header.top .count{font-family:var(--mono);font-size:.78rem;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+h2{font-family:var(--display);font-weight:700;font-size:1.25rem;margin:0;text-wrap:balance}
+h3{font-family:var(--display);font-weight:500;font-size:1.02rem;margin:0;letter-spacing:.03em;color:var(--muted)}
+p{margin:0}
+.muted{color:var(--muted)}
+.small{font-size:.88rem}
+.pane{display:flex;flex-direction:column;gap:18px;padding-block:18px}
+.stack{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px}
+button,.btn{font:inherit;font-weight:700;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:10px 14px;cursor:pointer;min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;-webkit-tap-highlight-color:transparent}
+button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.ghost{background:transparent;border-color:transparent;color:var(--muted);padding-inline:8px}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,label.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+input[type=text],input[type=search],input[type=password],select,textarea{font:inherit;font-size:16px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-height:44px;width:100%}
+textarea{min-height:72px;resize:vertical}
+label.field{display:flex;flex-direction:column;gap:6px;font-weight:500;font-size:.92rem}
+.big-cta{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:2px dashed var(--accent);background:var(--accent-soft);color:var(--ink);border-radius:var(--r);padding:26px 16px;text-align:center;cursor:pointer;min-height:140px}
+.big-cta strong{font-family:var(--display);font-size:1.25rem}
+.big-cta input{position:absolute;opacity:0;width:1px;height:1px}
+.thumbs{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+.thumbs .thumb{flex:none;flex-direction:column;gap:4px;padding:4px;min-height:0}
+.thumbs img{height:84px;width:84px;object-fit:contain;border-radius:6px;transition:transform .2s}
+.thumbs .thumb span{font-family:var(--mono);font-size:.72rem;font-weight:400;color:var(--muted)}
+.tips{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:.92rem}
+.status{display:flex;align-items:center;gap:10px;font-size:.95rem;color:var(--muted)}
+.spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .9s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation-duration:3s}.thumbs img{transition:none}}
+.err{color:var(--bad);font-size:.92rem}
+.note{font-size:.9rem;color:var(--warn)}
+.okmsg{font-size:.9rem;color:var(--ok)}
+.list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.crow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
+.crow:first-child{border-top:0}
+.crow .nm{font-weight:700;min-width:0;overflow-wrap:anywhere;text-align:left}
+button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:anywhere}
+.crow .meta{grid-column:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.84rem;color:var(--muted);min-width:0}
+.crow .ctl{grid-row:1/span 2;grid-column:2}
+.crow .sugg{grid-column:1/3}
+.crow.rv input.nm-edit{grid-column:1/3}
+.crow.rv .meta{grid-row:2}
+.crow.rv .ctl{grid-row:2;grid-column:2}
+.crow input.nm-edit{min-height:38px;padding:6px 10px;font-weight:700}
+.stepper{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.stepper button{min-height:38px;min-width:38px;padding:0;border:0;border-radius:0;background:var(--sunk);font-size:1.1rem}
+.stepper span{min-width:34px;text-align:center;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.badge{font-family:var(--mono);font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;border-radius:4px;padding:1px 6px;border:1px solid currentColor;white-space:nowrap}
+.badge.low{color:var(--warn)}
+.badge.bad{color:var(--bad)}
+.badge.ex{color:var(--accent)}
+.cost{display:inline-flex;gap:2px;align-items:center}
+.pip{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-family:var(--mono);font-size:.68rem;font-weight:500;line-height:1;background:var(--pC);color:var(--pCi);flex:none}
+.pip.W{background:var(--pW);color:var(--pWi);box-shadow:inset 0 0 0 1px var(--line)}
+.pip.U{background:var(--pU);color:#fff}.pip.B{background:var(--pB);color:#fff}
+.pip.R{background:var(--pR);color:#fff}.pip.G{background:var(--pG);color:#fff}
+.pip.H{width:auto;padding:0 4px;border-radius:9px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{min-height:36px;padding:4px 10px;font-weight:500;font-size:.9rem;border-radius:18px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chip .pip{width:16px;height:16px}
+.sugg{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sugg button{min-height:32px;padding:2px 10px;font-size:.86rem;font-weight:500;border-radius:16px}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.seg button{flex-direction:column;gap:0;padding:8px 6px;font-size:.95rem}
+.seg button small{font-weight:400;font-size:.76rem;color:var(--muted)}
+.seg button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+.empty{display:flex;flex-direction:column;gap:12px;padding:20px 16px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+.empty ol{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:6px}
+.deckhead{display:flex;flex-direction:column;gap:6px}
+.deckhead .arch{font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:var(--sunk);border-radius:8px;padding:8px 10px}
+.stat b{display:block;font-family:var(--mono);font-size:1.15rem;font-variant-numeric:tabular-nums}
+.stat span{font-size:.78rem;color:var(--muted)}
+.curve svg{width:100%;height:auto;display:block}
+.group h3{margin-bottom:6px}
+.drow{display:grid;grid-template-columns:2.2em minmax(0,1fr) auto;gap:8px;align-items:baseline;padding:7px 12px;border-top:1px solid var(--line)}
+.drow:first-child{border-top:0}
+.drow .q{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--accent);font-weight:500}
+.drow .why{grid-column:2/4;font-size:.84rem;color:var(--muted)}
+.prose{display:flex;flex-direction:column;gap:8px;max-width:65ch}
+.prose ul{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px}
+.saved{display:flex;flex-direction:column;gap:6px}
+.saved .srow{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.saved .srow > div{min-width:0}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:.92rem}
+.kv dt{color:var(--muted)} .kv dd{margin:0;overflow-wrap:anywhere}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+nav.tabs button{flex-direction:column;gap:2px;border:0;background:transparent;color:var(--muted);font-weight:500;font-size:.78rem;padding:6px 2px}
+nav.tabs button svg{width:24px;height:24px}
+nav.tabs button[aria-selected="true"]{color:var(--accent)}
+nav.tabs button[aria-selected="true"] .lbl{font-weight:700}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:500;z-index:30;max-width:calc(100% - 32px)}
+.banner{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:10px 12px;margin-top:12px}
+/* card sheet */
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--bg);width:100%;max-width:720px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px 16px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px}
+.sheet .grab{width:40px;height:4px;border-radius:2px;background:var(--line);align-self:center}
+.cardimg{width:100%;max-width:300px;align-self:center;aspect-ratio:488/680;border-radius:4.75%/3.5%;background:var(--sunk);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.9rem;overflow:hidden}
+.cardimg img{width:100%;height:100%;object-fit:cover;display:block}
+.oracle{white-space:pre-wrap;font-size:.95rem}
+details>summary{cursor:pointer;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Magic Binder</h1>
+    <span class="count" id="hdrCount">0 cards</span>
+  </header>
+  <div class="banner" id="updateBanner" hidden><span class="small">A new version of the app is ready.</span><button class="primary" id="btnUpdate">Update</button></div>
+  <div class="banner" id="installBanner" hidden><span class="small">Install: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Binder from your Home Screen.</span><button class="ghost" id="btnHideInstall" aria-label="Hide">✕</button></div>
+
+  <!-- SCAN -->
+  <section class="pane" id="pane-scan">
+    <div class="stack">
+      <h2>Add cards from photos</h2>
+      <p class="muted">Stack your cards so only the names show, then take a photo. The names are read and checked against every Magic card on your phone, and you confirm the list before anything is added.</p>
+      <p class="small muted" id="dbStatus"><span class="spinner" style="display:inline-block;vertical-align:-3px;width:14px;height:14px"></span> Loading the card list…</p>
+    </div>
+    <label class="big-cta" id="shootLabel">
+      <input id="camInput" type="file" accept="image/*" capture="environment">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      <strong>Take a photo</strong>
+      <span class="small muted">Opens your camera</span>
+    </label>
+    <label class="btn"><input id="libInput" type="file" accept="image/*" multiple hidden>Choose photos from library</label>
+    <div class="thumbs" id="thumbs" hidden></div>
+    <p class="small muted" id="thumbHint" hidden>The app finds which way the names run by itself. If it gets it wrong, tap a photo to turn it until the names read left to right.</p>
+    <div class="row" id="scanActions" hidden>
+      <button class="primary" id="btnIdentify" style="flex:1">Identify cards</button>
+      <button id="btnClearPhotos">Clear</button>
+    </div>
+    <div class="status" id="scanStatus" hidden><span class="spinner"></span><span id="scanStatusTxt">Reading your cards…</span><button class="ghost" id="btnStopScan">Stop</button></div>
+    <p class="err" id="scanErr" hidden></p>
+
+    <div class="stack" id="reviewBox" hidden>
+      <div class="row" style="justify-content:space-between">
+        <h2>Check what was found</h2>
+        <span class="small muted" id="reviewCount"></span>
+      </div>
+      <p class="small muted">Tap a name to correct it. Cards marked <span class="badge low">check</span> were a close match, and <span class="badge bad">unknown</span> isn't a card name yet.</p>
+      <div class="list" id="reviewList"></div>
+      <details class="panel" id="leftBox" hidden>
+        <summary>Text that didn't match a card (<span id="leftCount">0</span>)</summary>
+        <p class="small muted">Usually stray text from the artwork. If one of these is a card, tap the right name to add it.</p>
+        <div class="stack" id="leftList"></div>
+        <button id="btnAskClaudeLeft" hidden>Ask Claude about this text</button>
+      </details>
+      <div class="row">
+        <button class="primary" id="btnAddReviewed" style="flex:1">Add to collection</button>
+        <button id="btnDiscard">Discard</button>
+      </div>
+    </div>
+
+    <details class="panel" id="layoutTips">
+      <summary>How to lay out your cards</summary>
+      <div class="row" style="flex-wrap:nowrap;align-items:flex-start;gap:14px">
+        <svg viewBox="0 0 120 150" width="96" style="flex:none" role="img" aria-label="Cards stacked so only each name bar shows">
+          <g fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5">
+            <rect x="12" y="8" width="96" height="134" rx="6"/><rect x="12" y="30" width="96" height="112" rx="6"/>
+            <rect x="12" y="52" width="96" height="90" rx="6"/><rect x="12" y="74" width="96" height="68" rx="6"/>
+          </g>
+          <g fill="var(--accent)"><rect x="20" y="14" width="60" height="7" rx="2"/><rect x="20" y="36" width="70" height="7" rx="2"/><rect x="20" y="58" width="54" height="7" rx="2"/><rect x="20" y="80" width="66" height="7" rx="2"/></g>
+          <g fill="var(--line)"><rect x="20" y="94" width="80" height="40" rx="2"/></g>
+        </svg>
+        <ul class="tips" style="min-width:0">
+          <li>Stack the cards so each one covers the card above it, leaving only its name bar showing.</li>
+          <li>Up to about 10 cards per photo. Each name that shows counts as one copy.</li>
+          <li>Portrait or landscape both work.</li>
+          <li>Hold the phone about 20–25 cm away at 1×. Much closer and the iPhone switches to its macro lens, which can blur the edges. Flash off, so sleeves don't glare.</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="panel">
+      <h3>Type a card in</h3>
+      <div class="row">
+        <input type="text" id="manualName" placeholder="Start typing a card name" style="flex:1;min-width:0" autocomplete="off" autocapitalize="words">
+        <div class="stepper"><button id="mMinus" aria-label="Fewer">−</button><span id="mQty">1</span><button id="mPlus" aria-label="More">+</button></div>
+      </div>
+      <div class="sugg" id="manualSugg"></div>
+      <button id="btnManualAdd">Add card</button>
+    </div>
+
+    <details class="panel">
+      <summary>Paste a card list</summary>
+      <textarea id="pasteList" placeholder="One card per line, e.g.&#10;4 Lightning Bolt&#10;Black Widow, Double Agent"></textarea>
+      <button id="btnPasteAdd">Find these cards</button>
+      <p class="small muted">For lists you already have, such as an export from Arena or Moxfield, or a backup from this app.</p>
+    </details>
+  </section>
+
+  <!-- COLLECTION -->
+  <section class="pane" id="pane-coll" hidden>
+    <div class="stack">
+      <div class="row" style="justify-content:space-between">
+        <h2>Your collection</h2>
+        <span class="small muted" id="collSummary"></span>
+      </div>
+      <input type="search" id="collSearch" placeholder="Search by name, type or text" autocomplete="off">
+      <div class="chips" id="colorFilter"></div>
+      <div class="row" style="justify-content:space-between">
+        <select id="collSort" style="width:auto">
+          <option value="name">Sort by name</option>
+          <option value="cmc">Sort by mana value</option>
+          <option value="qty">Sort by copies</option>
+          <option value="added">Recently added</option>
+        </select>
+        <button class="ghost small" id="btnCopyColl">Copy list</button>
+      </div>
+    </div>
+    <div id="collBody"></div>
+  </section>
+
+  <!-- DECK -->
+  <section class="pane" id="pane-deck" hidden>
+    <div class="stack">
+      <h2>Build a deck</h2>
+      <p class="muted">Decks use only the cards in your collection. Basic lands are assumed to be on hand.</p>
+    </div>
+    <div class="panel">
+      <h3>Format</h3>
+      <div class="seg" id="fmtSeg">
+        <button data-fmt="casual" aria-pressed="true">Casual<small>60 cards</small></button>
+        <button data-fmt="limited" aria-pressed="false">Quick game<small>40 cards</small></button>
+        <button data-fmt="commander" aria-pressed="false">Commander<small>100, singleton</small></button>
+      </div>
+      <h3>Colors</h3>
+      <div class="chips" id="deckColors"></div>
+      <p class="small muted">Leave all off to pick the strongest colors automatically.</p>
+      <label class="field">Play style
+        <select id="deckStyle">
+          <option value="">Whatever is strongest</option>
+          <option value="aggro">Aggressive: fast creatures and burn</option>
+          <option value="midrange">Midrange: solid creatures and removal</option>
+          <option value="control">Control: removal, card draw, big finishers</option>
+          <option value="tribal">Tribal: one creature type</option>
+          <option value="beginner">Beginner friendly: simple to play</option>
+        </select>
+      </label>
+      <label class="field" id="notesField">Anything else? <span class="small muted">used when building with Claude</span>
+        <textarea id="deckNotes" placeholder="e.g. Build around my Villains. My friend plays a lot of flyers."></textarea>
+      </label>
+      <div class="seg" id="engineSeg" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <button data-eng="claude" aria-pressed="true">With Claude<small>smarter, needs internet</small></button>
+        <button data-eng="local" aria-pressed="false">Built-in<small>free, works offline</small></button>
+      </div>
+      <p class="small muted" id="engineHint"></p>
+      <button class="primary" id="btnBuild">Build deck</button>
+      <div class="status" id="buildStatus" hidden><span class="spinner"></span><span id="buildStatusTxt">Building your deck…</span><button class="ghost" id="btnStopBuild">Stop</button></div>
+      <p class="err" id="buildErr" hidden></p>
+    </div>
+    <div id="deckOut"></div>
+    <div class="stack" id="savedBox" hidden>
+      <h3>Saved decks</h3>
+      <div class="saved" id="savedList"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="pane" id="pane-set" hidden>
+    <h2>Settings</h2>
+    <div class="panel">
+      <h3>Claude for deck building</h3>
+      <p class="small">With a Claude API key, decks are built by Claude, which reads every card's text and plans around your cards. Each deck costs a few cents on your Anthropic account. Without a key, the built-in builder is used.</p>
+      <p class="small muted">Get a key at console.anthropic.com → API Keys. It is saved only on this phone and sent only to Anthropic.</p>
+      <input type="password" id="apiKey" placeholder="sk-ant-…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="row"><button class="primary" id="btnSaveKey">Save key</button><button id="btnTestKey">Test</button><button class="ghost danger" id="btnClearKey">Remove</button></div>
+      <p class="small" id="keyStatus"></p>
+    </div>
+    <div class="panel">
+      <h3>Card list</h3>
+      <dl class="kv" id="dbInfo"></dl>
+      <button id="btnUpdateNames">Check for new cards</button>
+      <p class="small" id="namesStatus"></p>
+      <p class="small muted">Adds names from new sets using Scryfall, so scans recognize them. Needs internet.</p>
+    </div>
+    <div class="panel">
+      <h3>Your data</h3>
+      <p class="small">Your collection and decks are stored only on this phone. Make a backup now and then: copy the list and keep it in a note or email it to yourself. To restore, paste it into "Paste a card list" on the Scan tab.</p>
+      <div class="row"><button id="btnBackup">Copy collection backup</button></div>
+      <p class="small muted" id="persistStatus"></p>
+    </div>
+    <div class="panel">
+      <h3>Offline scanning</h3>
+      <p class="small" id="offlineStatus">Checking…</p>
+      <button id="btnPrefetch">Download scanner for offline use</button>
+    </div>
+    <div class="panel">
+      <h3>About</h3>
+      <p class="small muted">Card data from the Forge project and Scryfall. Text reading by Tesseract. Magic: The Gathering is © Wizards of the Coast; this app is unofficial.</p>
+      <p class="small muted" id="appVersion"></p>
+      <button class="ghost danger" id="btnReset">Erase everything on this phone</button>
+      <div class="panel" id="resetConfirm" hidden><p>Erase your whole collection, saved decks and API key from this phone? This can't be undone.</p><div class="row"><button class="primary" id="yesReset">Erase</button><button id="noReset">Keep</button></div></div>
+    </div>
+  </section>
+</div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="scan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span class="lbl">Scan</span></button>
+  <button role="tab" aria-selected="false" data-tab="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="10" height="14" rx="1.5"/><path d="M17 7h1.5A1.5 1.5 0 0 1 20 8.5v10a1.5 1.5 0 0 1-1.5 1.5H10"/></svg><span class="lbl">Collection</span></button>
+  <button role="tab" aria-selected="false" data-tab="deck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="3" width="12" height="17" rx="1.5"/><path d="M3.5 6.5v13M20.5 6.5v13"/></svg><span class="lbl">Deck</span></button>
+  <button role="tab" aria-selected="false" data-tab="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span class="lbl">Settings</span></button>
+</nav>
+<div class="toast" id="toast" hidden></div>
+<div class="sheet-bg" id="sheetBg" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+
+<script src="matcher.js"></script>
+<script src="builder.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
