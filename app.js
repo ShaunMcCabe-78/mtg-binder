@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.3.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -870,8 +870,10 @@ $("#btnInstall").onclick = async () => { if (!installPrompt) return; installProm
 window.addEventListener("appinstalled", () => { $("#installBanner").hidden = true; });
 $("#btnHideInstall").onclick = () => { lsSet("mtg.hideInstall", true); $("#installBanner").hidden = true; };
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").then(reg => {
-    const show = w => { $("#updateBanner").hidden = false; $("#btnUpdate").onclick = () => w.postMessage("skipWaiting"); };
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(reg => {
+    // Apply a new version straight away unless a scan or review is in progress; then offer the button instead.
+    const busy = () => S.photos.length || S.review.length || !$("#scanStatus").hidden || !$("#buildStatus").hidden;
+    const show = w => { if (!busy()) { w.postMessage("skipWaiting"); return; } $("#updateBanner").hidden = false; $("#btnUpdate").onclick = () => w.postMessage("skipWaiting"); };
     if (reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
     reg.addEventListener("updatefound", () => { const w = reg.installing; w && w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) show(w); }); });
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
