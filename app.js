@@ -745,7 +745,7 @@ function claudeErr(e) {
   if (e.status === 401) return "Your API key was rejected. Check it in Settings.";
   if (e.status === 403) return "Your API key isn't allowed to do this. Check it in Settings.";
   if (e.status === 429) return "Claude is rate-limiting your key. Wait a minute and try again.";
-  if (e.status === 400 && /credit/i.test(e.message)) return "Your Anthropic account is out of credit. Add credit at console.anthropic.com.";
+  if (e.status === 400 && /credit/i.test(e.message)) return "Your Anthropic account is out of credit. Add credit at platform.claude.com → Billing.";
   if (e.status === 529 || e.status >= 500) return "Claude is busy right now. Try again shortly.";
   if (e instanceof TypeError || e.name === "TypeError") return "Couldn't reach Claude. Check your internet connection.";
   return "Claude couldn't build the deck" + (e.message ? ` (${e.message})` : "") + ".";
