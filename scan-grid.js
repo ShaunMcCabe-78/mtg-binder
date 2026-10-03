@@ -44,8 +44,9 @@
       cols.forEach((c, col) => {
         const b = found[col];
         // rowY: where this row's bars usually are, in case this cell's bar was found a little off (an ornate frame, say).
-        cells.push(b ? { row, col, rowY: Y, box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
-          : { row, col, rowY: Y, box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
+        // colX: the column's usual left/right edges, in case this bar was found cut short or shifted sideways.
+        cells.push(b ? { row, col, rowY: Y, colX: [c.x0, c.x1], box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
+          : { row, col, rowY: Y, colX: [c.x0, c.x1], box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
       });
       Y += pitch;
     }
@@ -103,16 +104,23 @@
         if (!match && cell.predicted) { const r = await core.readBar(ctx, src, cell.box); match = r.match; seen = seen || r.a || r.b; }
         // Still nothing: try a few heights around where the name should be (some frames put it lower, under an ornament).
         // Leave out the right side: the mana cost and frame ornaments there throw off the black-and-white cleanup.
-        const offLine = cell.rowY != null && Math.abs(cell.box.y0 - cell.rowY) > grid.barH * 0.3;
+        // A bar out of line with its row or column (too high, too thin, cut short, shifted) was probably an ornament, not the name:
+        // then use the row's height and the column's full width.
+        const bw = cell.box.x1 - cell.box.x0, cw = cell.colX ? cell.colX[1] - cell.colX[0] : bw;
+        const offLine = cell.rowY != null && (Math.abs(cell.box.y0 - cell.rowY) > grid.barH * 0.3 || (cell.box.y1 - cell.box.y0) < grid.barH * 0.7
+          || Math.abs(cell.box.x0 - cell.colX[0]) > cw * 0.08 || Math.abs(bw - cw) > cw * 0.12);
         if (!match && (!cell.predicted || offLine)) {
           const bh = grid.barH, base = offLine ? cell.rowY : cell.box.y0;
+          // Start a little left of the column edge so the first letter isn't cut off.
+          const x0 = Math.max(0, (offLine ? cell.colX[0] : cell.box.x0) - cw * 0.05), x1 = offLine ? cell.colX[1] : cell.box.x1;
           tries: for (const dy of [0, 0.4, 0.8, -0.3]) {
-            const rb = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, base + (dy - 0.15) * bh), y1: Math.min(H, base + (dy + 1.25) * bh) };
-            for (const mode of ["otsu", "local"]) {
-              const t = await core.recognize(ctx, core.cropBar(src, rb, 0.4, mode, 80), 7);
+            const rb = { x0, x1, y0: Math.max(0, base + (dy - 0.15) * bh), y1: Math.min(H, base + (dy + 1.25) * bh) };
+            // One line at a time (two clean-ups), then as separate lines of text: frame decorations above and below
+            // the name can stop the single-line read, while the separate-lines read still finds the name among them.
+            for (const [mode, psm] of [["otsu", 7], ["local", 7], ["otsu", 11]]) {
+              const t = await core.recognize(ctx, core.cropBar(src, rb, 0.4, mode, 80), psm);
               texts.push(t);
-              match = core.barMatch(ctx.matcher, t);
-              if (match) break tries;
+              for (const line of String(t || "").split("\n")) { match = core.barMatch(ctx.matcher, line); if (match) break tries; }
             }
           }
         }
