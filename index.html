@@ -352,8 +352,18 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   <section class="pane" id="pane-wish" hidden>
     <div class="stack">
       <div class="row" style="justify-content:space-between">
-        <h2>Wishlist</h2>
+        <h2>Wishlists</h2>
         <span class="small muted" id="wishSummary"></span>
+      </div>
+      <div class="colbar"><select id="wishSel" aria-label="Wishlist to show"></select><button id="btnWishManage">Manage</button></div>
+      <div class="panel" id="wishManage" hidden>
+        <div class="stack" style="gap:6px"><h3>New wishlist</h3>
+          <div class="row"><input type="text" id="newWishName" placeholder="e.g. Commander upgrades" style="flex:1;min-width:0" autocapitalize="sentences"><button class="primary" id="btnCreateWish">Create</button></div></div>
+        <div class="stack" style="gap:6px"><h3>This wishlist</h3>
+          <div class="row"><input type="text" id="renameWish" style="flex:1;min-width:0" autocapitalize="sentences" aria-label="Wishlist name"><button id="btnRenameWish">Rename</button></div>
+          <button class="ghost danger" id="btnDeleteWish">Delete this wishlist</button>
+          <div class="panel" id="delWishConfirm" hidden><p id="delWishMsg"></p><div class="row"><button class="primary" id="yesDelWish">Delete</button><button id="noDelWish">Keep</button></div></div>
+        </div>
       </div>
       <div class="panel stack" style="gap:8px">
         <label class="field">Add a card you want<input type="text" id="wishName" placeholder="Card name" autocomplete="off" autocapitalize="words"></label>
