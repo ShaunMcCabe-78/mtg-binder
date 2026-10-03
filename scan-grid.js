@@ -58,6 +58,21 @@
     const grid = layoutGrid(core.detectBars(src), W, H);
     if (!grid) return root.ScanStacked.scan(ctx, src);   // no grid found: fall back to the general method
 
+    // Safety net: if the first row of "names" reads as type lines ("Sorcery", "Creature — …"), the rows found are
+    // the type lines, which sit about half a card below the names. Move every row up to where the names are.
+    const firstRow = grid.cells.filter(c => c.row === 0 && !c.predicted);
+    let typeLines = 0;
+    for (const cell of firstRow) {
+      ctx.check(); ctx.status("checking the grid…");
+      const t = await core.recognize(ctx, core.cropBar(src, cell.box, 0, "otsu"), 7);
+      if (CardMatcher.isTypeLine(t)) typeLines++;
+    }
+    if (firstRow.length && typeLines * 2 >= firstRow.length) {
+      const shift = grid.pitch * 0.505;
+      grid.cells = grid.cells.map(c => ({ ...c, predicted: true, box: { ...c.box, y0: c.box.y0 - shift, y1: c.box.y1 - shift } })).filter(c => c.box.y0 >= 0);
+      // A row of names may also exist below the last row of type lines found; it isn't needed: names sit above their type lines.
+    }
+
     const counts = new Map(), scores = new Map(), leftovers = [];
     const add = m => { counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score)); };
     let n = 0;

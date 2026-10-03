@@ -34,3 +34,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `sw.js`, `manifest.webmanifest` | Offline support and Home Screen install |
 
 Magic: The Gathering is © Wizards of the Coast. This is an unofficial fan project.
+
+## Planned
+- **Card set:** show which set each card comes from in the card sheet (and let the collection record the set/printing).
+- **Binder pages:** a scan option for binder/folder pages with plastic pockets (building on Grid mode).

@@ -252,7 +252,15 @@
   }
   function usableBarLine(l) { return !!l && !TYPE_LINE.test(l) && !TYPE_ANYWHERE.test(l) && !looksLikeSentence(l, true); }
 
-  const api = { Matcher, key, fitDistance, countFromReadings, usableBarLine, clearlyNotName };
+  // Does a line start like a type line? (used to check which row of a grid was found; a few real names such as
+  // "Land Tax" start with a type word too, so this is only used as a majority vote over a whole row)
+  function isTypeLine(l) {
+    if (!l) return false;
+    const t = l.replace(/^[^A-Za-z]*(?:[A-Za-z]{1,2}\s+)?/, "");
+    return TYPE_LINE.test(l.trim()) || TYPE_ANYWHERE.test(l) ||
+      /^(?:(?:Legendary|Basic|Snow|World|Kindred|Tribal)\s+)*(?:Artifact|Enchantment|Creature|Land|Planeswalker|Instant|Sorcery|Battle)\b/i.test(t);
+  }
+  const api = { Matcher, key, fitDistance, countFromReadings, usableBarLine, clearlyNotName, isTypeLine };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CardMatcher = api;
 })(typeof self !== "undefined" ? self : this);

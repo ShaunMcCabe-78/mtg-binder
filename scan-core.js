@@ -14,8 +14,9 @@
   function prepCanvas(src, long, binar) {
     const [W, H] = dimsOf(src); const sc = Math.min(3, long / Math.max(W, H));
     const w = Math.round(W * sc), h = Math.round(H * sc);
-    const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
-    x.imageSmoothingQuality = "high"; x.drawImage(src, 0, 0, w, h);
+    let c, x;
+    if (sc < 1) ({ c, x } = shrink(src, w, h));
+    else { c = document.createElement("canvas"); c.width = w; c.height = h; x = c.getContext("2d", { willReadFrequently: true }); x.imageSmoothingQuality = "high"; x.drawImage(src, 0, 0, w, h); }
     const d = x.getImageData(0, 0, w, h), a = d.data, n = w * h, g = new Uint8Array(n);
     for (let i = 0, j = 0; j < n; i += 4, j++) g[j] = (a[i] * .299 + a[i + 1] * .587 + a[i + 2] * .114) | 0;
     const st = NameBars.stretch(g), bw = binar ? NameBars.otsu(st) : st;
@@ -80,11 +81,24 @@
   }
 
   // Grey pixels of the photo at ~1000 px on the long side, for layout analysis.
+  // Shrink a photo smoothly. Some browsers (Safari) shrink large images roughly in one step, which can make thin
+  // name bars vanish; halving in steps gives the same smooth result everywhere.
+  function shrink(src, w, h) {
+    let cur = src, [cw, ch] = dimsOf(src);
+    while (cw > w * 2 && ch > h * 2) {
+      const nw = Math.round(cw / 2), nh = Math.round(ch / 2);
+      const t = document.createElement("canvas"); t.width = nw; t.height = nh; const tx = t.getContext("2d");
+      tx.imageSmoothingEnabled = true; tx.imageSmoothingQuality = "high"; tx.drawImage(cur, 0, 0, nw, nh);
+      cur = t; cw = nw; ch = nh;
+    }
+    const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high"; x.drawImage(cur, 0, 0, w, h);
+    return { c, x };
+  }
   function smallGrey(src) {
     const [W, H] = dimsOf(src); const sc = Math.min(1, 1000 / Math.max(W, H));
     const w = Math.round(W * sc), h = Math.round(H * sc);
-    const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
-    x.drawImage(src, 0, 0, w, h);
+    const { x } = shrink(src, w, h);
     const d = x.getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
     for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
     return { g, w, h, sc };
@@ -186,5 +200,5 @@
   }
   const median = a => { const s = a.slice().sort((p, q) => p - q); return s.length ? s[s.length >> 1] : 0; };
 
-  root.ScanCore = { dimsOf, loadImg, prepCanvas, rotated, findTextDirection, cleanOcr, regroupWords, detectBars, cropBar, barMatch, readBar, closerLook, readWholePhoto, columnsOf, median, recognize };
+  root.ScanCore = { shrink, dimsOf, loadImg, prepCanvas, rotated, findTextDirection, cleanOcr, regroupWords, detectBars, cropBar, barMatch, readBar, closerLook, readWholePhoto, columnsOf, median, recognize };
 })(typeof self !== "undefined" ? self : this);
