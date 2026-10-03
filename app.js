@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.9.5";
+const APP_VERSION = "1.10.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");

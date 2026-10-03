@@ -11,6 +11,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 
 ## What it does
 - **Scanning:** photograph a stack of overlapped cards so only the name bars show. The text is read on the phone (Tesseract) and each name is checked against a built-in list of every Magic card (`cards.json`). Portrait or landscape photos both work.
+- **Grid scanning:** the app first finds each card's outline, then reads the name, set code and collector number at their fixed places on the straightened card. Name-bar detection is the backup for any card whose outline isn't found.
 - **Grid check:** a grid should have a card in every square. The app reports how many it read (e.g. "read 8 of 9 cards"), takes one more look at any unread square, and otherwise lists it as **missing** with a picture of the square, to name by hand or remove before adding.
 - **Sets:** in Grid mode the whole card shows, so the app also reads which printing each card is from the small print at the bottom left (e.g. "U 0178 · SOS • EN"). If it can't tell, no set is recorded. In the card sheet you can set or change the printing of each copy; Stacked scans save cards without a set. The backup keeps sets as `2 Name (SOS) 178` lines.
 - **Prices:** euro prices from Cardmarket via Scryfall (updated daily): per copy in the card sheet (by its recorded printing), per card and in total in the collection (sort by value), per deck, and for everything in Settings. Kept on the phone for offline viewing.
@@ -32,6 +33,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `namebars.js` | Finds each card's name bar in a photo so it can be read on its own |
 | `scan-core.js` | Shared scanning steps: text direction, bar finding, reading one bar |
 | `scan-stacked.js` | Stacked layout: overlapped cards in one column |
+| `cards.js` | Grid layout: finds each card's outline (63 × 88 mm, dark border), its exact size and tilt, and straightens it |
 | `scan-grid.js` | Grid layout: cards side by side; works out the grid and reads each card's name bar |
 | `scan-set.js` | Grid layout: reads which printing (set code and collector number) each card is |
 | `builder.js` | Built-in deckbuilder |

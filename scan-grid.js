@@ -112,11 +112,22 @@
     ctx.status("finding the cards…");
     const [W, H] = core.dimsOf(src);
     const grid = layoutGrid(core.detectBars(src), W, H);
-    if (!grid) return root.ScanStacked.scan(ctx, src);   // no grid found: fall back to the general method
+    // Card outlines first: each card's rectangle gives its exact size and tilt, and the name, set code and number
+    // sit at fixed places on a card. The name-bar grid is the backup for any spot without a found card.
+    let found = [];
+    if (root.CardFinder) {
+      const named = grid ? grid.cells.filter(c => !c.predicted) : [];
+      const hint = named.length ? core.median(named.map(c => c.colX[1] - c.colX[0])) / BAR_OF_CARD : null;
+      try { found = root.CardFinder.find(src, hint); } catch (e) { found = []; }
+      if (grid && grid.cols === 1 && grid.stackLike && found.length < 2) found = [];   // a stack, not a grid
+    }
+    if (!grid && !found.length) return root.ScanStacked.scan(ctx, src);   // no grid found: fall back to the general method
 
     // Safety net: if the first row of "names" reads as type lines ("Sorcery", "Creature — …"), the rows found are
     // the type lines, which sit about half a card below the names. Move every row up to where the names are.
-    const firstRow = grid.cells.filter(c => c.row === 0 && !c.predicted);
+    // Spots of the name-bar grid not inside a found card are still read the old way.
+    if (grid) grid.cells = grid.cells.filter(c => !found.some(card => root.CardFinder.covers(card, (c.box.x0 + c.box.x1) / 2, (c.box.y0 + c.box.y1) / 2, 0.05)));
+    const firstRow = grid ? grid.cells.filter(c => c.row === 0 && !c.predicted) : [];
     let typeLines = 0;
     for (const cell of firstRow) {
       ctx.check(); ctx.status("checking the grid…");
@@ -134,12 +145,23 @@
       counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score));
       if (printing) { const s = sets.get(m.name) || {}; s[printing.key] = (s[printing.key] || 0) + 1; sets.set(m.name, s); }
     };
-    // Card size for reading the set: the median over the grid is steadier than any one name bar.
-    const unit = core.median(grid.cells.map(c => (c.box.x1 - c.box.x0) / 0.89 / 63));
+    const total = found.length + (grid ? grid.cells.length : 0);
     let n = 0;
-    for (const cell of grid.cells) {
+    // --- Found cards: straighten each one and read it at the known positions (mm on a 63 x 88 mm card).
+    for (const card of found) {
       ctx.check(); n++;
-      ctx.status(`reading card ${n} of ${grid.cells.length}…`);
+      ctx.status(`reading card ${n} of ${total}…`);
+      const r = await readFoundCard(ctx, src, card);
+      if (r.match) add(r.match, r.printing);
+      else missing.push({ row: card.row, col: card.col, thumb: r.thumb, seen: "" });
+    }
+    // --- Backup: name-bar spots without a found card.
+    const cells = grid ? grid.cells : [];
+    // Card size for reading the set: the median over the grid is steadier than any one name bar.
+    const unit = cells.length ? core.median(cells.map(c => (c.box.x1 - c.box.x0) / 0.89 / 63)) : 0;
+    for (const cell of cells) {
+      ctx.check(); n++;
+      ctx.status(`reading card ${n} of ${total}…`);
       let match = null, seen = "", guessed = false;
       const texts = [];   // everything read for this cell, for a best guess at the end
       if (!cell.predicted) {
@@ -217,7 +239,7 @@
       let printing = null;
       if (match && root.ScanSet && ctx.printsOf) {
         // The whole card shows in a grid, so the small print and set symbol can say which printing it is.
-        ctx.status(`reading card ${n} of ${grid.cells.length} (set)…`);
+        ctx.status(`reading card ${n} of ${total} (set)…`);
         try { printing = await root.ScanSet.identify(ctx, src, cell.box, match.name, unit); } catch (e) { if (e && e.code === "cancelled") throw e; }
         // A guessed name confirmed by its own collector number in the small print is no longer a guess.
         if (guessed && printing && printing.how === "code" && /:\S/.test(printing.key)) match = { ...match, score: 0.95 };
@@ -225,11 +247,73 @@
       if (match) add(match, printing);
       else missing.push({ row: cell.row, col: cell.col, thumb, seen: !cell.predicted && seen && !CardMatcher.clearlyNotName(seen) ? seen.split("\n")[0] : "" });
     }
-    const rows = Math.max(0, ...grid.cells.map(c => c.row)) + 1;
+    const rows = Math.max(0, ...found.map(c => c.row), ...cells.map(c => c.row)) + 1;
+    const cols = Math.max(grid ? grid.cols : 0, 0, ...found.map(c => c.col + 1));
+    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name), sets: sets.get(name) })), leftovers, missing, grid: { rows, cols, cells: total } };
     // A single column with bars much closer together than a card height is really a stack.
-    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name), sets: sets.get(name) })), leftovers, missing, grid: { rows, cols: grid.cols, cells: grid.cells.length } };
-    if (grid.cols === 1 && grid.stackLike) res.hint = "stacked";
+    if (!found.length && grid && grid.cols === 1 && grid.stackLike) res.hint = "stacked";
     return res;
+  }
+
+  /* Read one found card. Positions in mm on a 63 x 88 mm card; the name bar spans 3.5-59.5 mm across, about 3.8-8.6 mm down
+     (some frames put the name a little lower, so further looks cover 2-13 mm). Returns { match, printing, thumb }. */
+  async function readFoundCard(ctx, src, card) {
+    const core = C();
+    const M = 4;   // mm of margin around the card in the straightened image
+    const { canvas: cc, pxPerMm: S } = root.CardFinder.straighten(src, card, 12, M);
+    const mm = (x0, y0, x1, y1) => ({ x0: (x0 + M) * S, y0: (y0 + M) * S, x1: (x1 + M) * S, y1: (y1 + M) * S });
+    // The name bar: found on the straightened card (the outline can be a millimetre or two off), near where it should be:
+    // centre about 6 mm from the top, most of the card wide. Else the standard place.
+    let bar = mm(3.465, 3.8, 59.535, 8.6);   // centred on the card, 0.89 of its width: what the set reader expects
+    try {
+      const near = core.detectBars(cc).filter(b => { const yc = (b.y0 + b.y1) / 2 / S - M, w = (b.x1 - b.x0) / S;
+        return yc > 1 && yc < 13 && w > 40 && w < 62; });
+      if (near.length) {
+        const b = near.sort((p, q) => Math.abs((p.y0 + p.y1) / 2 / S - M - 6.2) - Math.abs((q.y0 + q.y1) / 2 / S - M - 6.2))[0];
+        bar = { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark };
+      }
+    } catch (e) {}
+    const texts = [];
+    let match = null, guessed = false;
+    // 1. The name bar, as one line.
+    const r = await core.readBar(ctx, cc, bar);
+    match = r.match; texts.push(r.a, r.b);
+    // 2. A closer look over a taller strip.
+    if (!match) { const line = await core.closerLook(ctx, cc, mm(2.5, 0.5, 60.5, 12.5)); if (line) match = core.barMatch(ctx.matcher, line); }
+    // 3. Strips at a few heights, without the mana cost on the right; as one line and as separate lines.
+    if (!match) {
+      tries: for (const y of [3.4, 4.6, 5.8, 2.2, 7, 1, -0.5]) {
+        const box = mm(2.5, y, 60.5, y + 6);
+        for (const [mode, psm] of [["otsu", 7], ["local", 7], ["otsu", 11]]) {
+          const t = await core.recognize(ctx, core.cropBar(cc, box, 0.35, mode, 80), psm);
+          texts.push(t);
+          for (const line of String(t || "").split("\n")) { match = core.barMatch(ctx.matcher, line); if (match) break tries; }
+        }
+      }
+      if (match) match = { ...match, score: Math.min(match.score, 0.9) };
+    }
+    // 4. The closest card name as a guess (marked "check").
+    if (!match) {
+      let best = null;
+      for (const t of texts) for (const line of String(t || "").split("\n")) {
+        if (!CardMatcher.usableBarLine(line) || CardMatcher.isTypeLine(line)) continue;
+        const m = ctx.matcher.matchLine(line, { relaxed: true });
+        if (m && m.score >= 0.8 && CardMatcher.key(m.name).length >= 6 && !CardMatcher.startsMidWord(line, m) && (!best || m.score > best.score)) best = m;
+      }
+      if (best) { match = { ...best, score: Math.min(best.score, 0.9) }; guessed = true; }
+    }
+    let printing = null, thumb = null;
+    if (match && root.ScanSet && ctx.printsOf) {
+      try { printing = await root.ScanSet.identify(ctx, cc, bar, match.name, S); } catch (e) { if (e && e.code === "cancelled") throw e; }
+      // A guess confirmed by its own collector number in the small print is no longer a guess.
+      if (guessed && printing && printing.how === "code" && /:\S/.test(printing.key)) match = { ...match, score: 0.95 };
+    }
+    if (!match) {
+      const t = document.createElement("canvas"), w = 150, h = Math.round(w * 88 / 63); t.width = w; t.height = h;
+      const x = t.getContext("2d"); x.imageSmoothingQuality = "high"; x.drawImage(cc, M * S, M * S, 63 * S, 88 * S, 0, 0, w, h);
+      try { thumb = t.toDataURL("image/jpeg", 0.75); } catch (e) {}
+    }
+    return { match, printing, thumb };
   }
 
   root.ScanGrid = { scan, layoutGrid };
