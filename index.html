@@ -169,10 +169,21 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   <section class="pane" id="pane-scan">
     <div class="stack">
       <h2>Add cards from photos</h2>
-      <p class="muted">Stack your cards so only the names show, then take a photo. The names are read and checked against every Magic card on your phone, and you confirm the list before anything is added.</p>
+      <p class="muted">Lay out your cards, take a photo, and the names are read and checked against every Magic card on your phone. You confirm the list before anything is added.</p>
       <div class="target">
         <div class="colbar"><span class="lbl">Saving to</span><select id="targetSel" aria-label="Collection to save scanned cards to"></select><button id="btnNewTarget">+ New</button></div>
         <div class="row" id="newTargetBox" hidden><input type="text" id="newTargetName" placeholder="Collection name, e.g. Marvel box" style="flex:1;min-width:0" autocapitalize="sentences"><button class="primary" id="btnCreateTarget">Create</button><button class="ghost" id="btnCancelTarget">Cancel</button></div>
+      </div>
+      <div class="target">
+        <div class="colbar"><span class="lbl">Layout</span></div>
+        <div class="seg" id="modeSeg" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <button data-mode="stacked" aria-pressed="true">
+            <svg viewBox="0 0 60 44" width="54" height="40" aria-hidden="true"><g fill="var(--surface)" stroke="currentColor" stroke-width="1.5"><rect x="12" y="2" width="36" height="40" rx="3"/><rect x="12" y="10" width="36" height="32" rx="3"/><rect x="12" y="18" width="36" height="24" rx="3"/></g><g fill="var(--accent)"><rect x="16" y="4" width="20" height="3" rx="1"/><rect x="16" y="12" width="24" height="3" rx="1"/><rect x="16" y="20" width="18" height="3" rx="1"/></g></svg>
+            Stacked<small>names showing</small></button>
+          <button data-mode="grid" aria-pressed="false">
+            <svg viewBox="0 0 60 44" width="54" height="40" aria-hidden="true"><g fill="var(--surface)" stroke="currentColor" stroke-width="1.5"><rect x="4" y="2" width="15" height="19" rx="2"/><rect x="22" y="2" width="15" height="19" rx="2"/><rect x="40" y="2" width="15" height="19" rx="2"/><rect x="4" y="23" width="15" height="19" rx="2"/><rect x="22" y="23" width="15" height="19" rx="2"/><rect x="40" y="23" width="15" height="19" rx="2"/></g><g fill="var(--accent)"><rect x="6" y="4" width="10" height="2.5"/><rect x="24" y="4" width="10" height="2.5"/><rect x="42" y="4" width="10" height="2.5"/><rect x="6" y="25" width="10" height="2.5"/><rect x="24" y="25" width="10" height="2.5"/><rect x="42" y="25" width="10" height="2.5"/></g></svg>
+            Grid<small>cards side by side</small></button>
+        </div>
       </div>
       <p class="small muted" id="dbStatus"><span class="spinner" style="display:inline-block;vertical-align:-3px;width:14px;height:14px"></span> Loading the card list…</p>
     </div>
@@ -191,6 +202,8 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
     </div>
     <div class="status" id="scanStatus" hidden><span class="spinner"></span><span id="scanStatusTxt">Reading your cards…</span><button class="ghost" id="btnStopScan">Stop</button></div>
     <p class="err" id="scanErr" hidden></p>
+    <p class="small muted" id="scanNote" hidden></p>
+    <div class="banner" id="modeHint" hidden><span class="small" id="modeHintTxt"></span><button class="primary" id="btnSwitchMode">Scan again</button></div>
 
     <div class="stack" id="reviewBox" hidden>
       <div class="row" style="justify-content:space-between">
@@ -213,24 +226,21 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 
     <details class="panel" id="layoutTips">
       <summary>How to lay out your cards</summary>
-      <div class="row" style="flex-wrap:nowrap;align-items:flex-start;gap:14px">
-        <svg viewBox="0 0 120 150" width="96" style="flex:none" role="img" aria-label="Cards stacked so only each name bar shows">
-          <g fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5">
-            <rect x="12" y="8" width="96" height="134" rx="6"/><rect x="12" y="30" width="96" height="112" rx="6"/>
-            <rect x="12" y="52" width="96" height="90" rx="6"/><rect x="12" y="74" width="96" height="68" rx="6"/>
-          </g>
-          <g fill="var(--accent)"><rect x="20" y="14" width="60" height="7" rx="2"/><rect x="20" y="36" width="70" height="7" rx="2"/><rect x="20" y="58" width="54" height="7" rx="2"/><rect x="20" y="80" width="66" height="7" rx="2"/></g>
-          <g fill="var(--line)"><rect x="20" y="94" width="80" height="40" rx="2"/></g>
-        </svg>
-        <ul class="tips" style="min-width:0">
-          <li>Stack the cards so each one covers the card above it, leaving only its name bar showing.</li>
-          <li>Up to about 10 cards per photo. Each name that shows counts as one copy.</li>
-          <li>Or lay cards out side by side, for example 3 × 3. Each card's name bar is read.</li>
-          <li>Portrait or landscape both work. The bottom card showing in full is fine.</li>
-          <li>Hold the phone about 20–25 cm away. Much closer and the iPhone switches to its macro lens, which can blur the edges. To fill the picture with the cards, use the camera's 2× button instead of moving closer.</li>
-          <li>Flash off, and avoid glare on sleeves. Less table around the cards makes scans quicker.</li>
-        </ul>
-      </div>
+      <ul class="tips" id="tipsStacked">
+        <li>Stack the cards so each one covers the card above it, leaving only its name bar showing.</li>
+        <li>Up to about 10 cards per photo. Each name that shows counts as one copy.</li>
+        <li>The bottom card showing in full is fine.</li>
+      </ul>
+      <ul class="tips" id="tipsGrid" hidden>
+        <li>Lay cards side by side in rows, for example 3 × 3, with the cards upright and lined up.</li>
+        <li>Keep small, even gaps between cards. Every card's name bar must be visible.</li>
+        <li>Each card counts once, so duplicates can sit in the grid too.</li>
+      </ul>
+      <ul class="tips">
+        <li>Portrait or landscape both work.</li>
+        <li>Hold the phone about 20–25 cm away. Much closer and the iPhone switches to its macro lens, which can blur the edges. To fill the picture with the cards, use the camera's 2× button instead of moving closer.</li>
+        <li>Flash off, and avoid glare on sleeves. Less table around the cards makes scans quicker.</li>
+      </ul>
     </details>
 
     <div class="panel">
@@ -381,6 +391,9 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 
 <script src="matcher.js"></script>
 <script src="namebars.js"></script>
+<script src="scan-core.js"></script>
+<script src="scan-stacked.js"></script>
+<script src="scan-grid.js"></script>
 <script src="builder.js"></script>
 <script src="app.js"></script>
 </body>

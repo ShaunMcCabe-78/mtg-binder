@@ -25,6 +25,9 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `app.js` | App logic: scanning, collection, decks, settings |
 | `matcher.js` | Fuzzy matching of scanned text to real card names |
 | `namebars.js` | Finds each card's name bar in a photo so it can be read on its own |
+| `scan-core.js` | Shared scanning steps: text direction, bar finding, reading one bar |
+| `scan-stacked.js` | Stacked layout: overlapped cards in one column |
+| `scan-grid.js` | Grid layout: cards side by side; works out the grid and reads each card's name bar |
 | `builder.js` | Built-in deckbuilder |
 | `cards.json` | Every card: name, cost, type, P/T, short rules text (built from the Forge project's card data) |
 | `eng.traineddata.gz` | English text-reading model for Tesseract |

@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.6.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -21,7 +21,7 @@ const TESS = {
 const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
 
 /* ---------- state + storage ---------- */
-const S = { cols: {}, order: [], target: "main", view: "all", buildFrom: "all", decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
+const S = { scanMode: "stacked", cols: {}, order: [], target: "main", view: "all", buildFrom: "all", decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
 let DB = new Map();          // name -> card data
 let matcher = null;
 let extraNames = [], extraCards = {};
@@ -211,175 +211,51 @@ function getOcr() {
   ocrWorkerP.catch(() => { ocrWorkerP = null; });
   return ocrWorkerP;
 }
-function loadImg(file) {
-  return new Promise((res, rej) => { const url = URL.createObjectURL(file); const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); res(img); }; img.onerror = () => { URL.revokeObjectURL(url); rej({ code: "badimg" }); }; img.src = url; });
-}
-const dimsOf = src => [src.naturalWidth || src.width, src.naturalHeight || src.height];
-function prepCanvas(src, long, binar) {
-  const [W, H] = dimsOf(src); const sc = Math.min(3, long / Math.max(W, H));
-  const w = Math.round(W * sc), h = Math.round(H * sc);
-  const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
-  x.imageSmoothingQuality = "high"; x.drawImage(src, 0, 0, w, h);
-  const d = x.getImageData(0, 0, w, h), a = d.data, n = w * h, g = new Uint8Array(n), hist = new Uint32Array(256); let lo = 255, hi = 0;
-  for (let i = 0, j = 0; j < n; i += 4, j++) { const v = (a[i] * .299 + a[i + 1] * .587 + a[i + 2] * .114) | 0; g[j] = v; if (v < lo) lo = v; if (v > hi) hi = v; }
-  const span = Math.max(1, hi - lo);
-  for (let j = 0; j < n; j++) { g[j] = ((g[j] - lo) * 255 / span) | 0; hist[g[j]]++; }
-  let t = 128;
-  if (binar) { let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i]; let sB = 0, wB = 0, best = 0;
-    for (let i = 0; i < 256; i++) { wB += hist[i]; if (!wB) continue; const wF = n - wB; if (!wF) break; sB += i * hist[i];
-      const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF); if (v > best) { best = v; t = i; } } }
-  for (let i = 0, j = 0; j < n; i += 4, j++) { const v = binar ? (g[j] > t ? 255 : 0) : g[j]; a[i] = a[i + 1] = a[i + 2] = v; }
-  x.putImageData(d, 0, 0);
-  return c;
-}
-function rotated(src, deg) {
-  const [W, H] = dimsOf(src); const c = document.createElement("canvas"); const side = deg % 180 !== 0;
-  c.width = side ? H : W; c.height = side ? W : H; const x = c.getContext("2d");
-  x.translate(c.width / 2, c.height / 2); x.rotate(deg * Math.PI / 180); x.drawImage(src, -W / 2, -H / 2); return c;
-}
-function textScore(data) {
-  let s = 0; for (const w of (data && data.words) || []) { const t = (w.text || "").trim();
-    if (w.confidence >= 60 && /^[A-Za-z][A-Za-z'.,\-]{2,}$/.test(t)) s += t.length; } return s;
-}
-async function findTextDirection(worker, img, onStep) {
-  const small = prepCanvas(img, 1400, false); const scores = {};
-  for (const deg of [0, 90, 270, 180]) {
-    if (ocrStop) throw { code: "cancelled" };
-    onStep && onStep(deg);
-    const { data } = await worker.recognize(deg ? rotated(small, deg) : small, {}, { text: true, blocks: true });
-    scores[deg] = textScore(data);
-    if (deg === 0 && scores[0] >= 40) return 0;
-  }
-  let best = 0; for (const d in scores) if (scores[d] > scores[best]) best = +d;
-  return scores[best] >= 8 ? best : 0;
-}
-function cleanOcr(text) {
-  return (text || "").split(/\r?\n/).map(l => l.replace(/[ \t]+/g, " ").trim()).filter(l => {
-    const letters = (l.match(/[A-Za-z]/g) || []).length; return letters >= 4 && letters / l.replace(/\s/g, "").length >= 0.6;
-  }).join("\n");
-}
-// Rebuild lines from word positions so names split into pieces are joined back up.
-/* ---------- name bars: find each card's name strip and read it on its own ---------- */
-// Does this line read as a card name? (a full name, or a clear start of one)
-function barMatches(line) { if (!line || !matcher) return null; const l = line.split("\n")[0]; if (!CardMatcher.usableBarLine(l)) return null; return matcher.matchLine(l) || matcher.matchPrefix(l); }
-function detectBars(src) {
-  const [W, H] = dimsOf(src); const sc = Math.min(1, 1000 / Math.max(W, H));
-  const w = Math.round(W * sc), h = Math.round(H * sc);
-  const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
-  x.drawImage(src, 0, 0, w, h);
-  const d = x.getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
-  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
-  return NameBars.findBars(g, w, h).map(b => ({ x0: b.x0 / sc, y0: b.y0 / sc, x1: b.x1 / sc, y1: b.y1 / sc, dark: !!b.dark }));
-}
-// Cut one bar out of the full-size photo at ~60 px tall, clean it up, and put a white margin round it.
-function cropBar(src, b, trimRight, mode, height) {
-  const bh = b.y1 - b.y0, pad = bh * 0.1, sw = (b.x1 - b.x0) * (1 - trimRight), sh = bh + 2 * pad;
-  const [W, H] = dimsOf(src); const sy = Math.max(0, b.y0 - pad), sx = Math.max(0, b.x0);
-  const sc = (height || 60) / bh, dw = Math.max(1, Math.round(sw * sc)), dh = Math.max(1, Math.round(Math.min(sh, H - sy) * sc)), M = 20;
-  const c = document.createElement("canvas"); c.width = dw + 2 * M; c.height = dh + 2 * M;
-  const x = c.getContext("2d", { willReadFrequently: true });
-  x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.imageSmoothingQuality = "high";
-  x.drawImage(src, sx, sy, Math.min(sw, W - sx), Math.min(sh, H - sy), M, M, dw, dh);
-  const img = x.getImageData(M, M, dw, dh), d = img.data, g = new Uint8Array(dw * dh);
-  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
-  let st = NameBars.stretch(g);
-  // Most bars are dark text on a light strip; a few frames use light text on a dark strip. Flip those.
-  const sorted = Array.from(st).sort((p, q) => p - q); if (sorted[sorted.length >> 1] < 110) st = st.map(v => 255 - v);
-  const bw = mode === "local" ? NameBars.localMean(st, dw, dh, 49, 10) : NameBars.otsu(st);
-  for (let i = 0, j = 0; j < bw.length; i += 4, j++) { d[i] = d[i + 1] = d[i + 2] = bw[j]; d[i + 3] = 255; }
-  x.putImageData(img, M, M);
-  return c;
-}
-
-function regroupWords(data) {
-  const ws = ((data && data.words) || []).filter(w => w && w.text && w.text.trim() && w.bbox).map(w => ({ t: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, yc: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }));
-  if (!ws.length) return "";
-  const hs = ws.map(w => w.h).sort((a, b) => a - b), mh = hs[hs.length >> 1] || 10;
-  ws.sort((a, b) => a.yc - b.yc); const lines = [];
-  for (const w of ws) { const L = lines.find(L => Math.abs(L.yc - w.yc) < mh * 0.6);
-    if (L) { L.w.push(w); L.yc = L.w.reduce((a, v) => a + v.yc, 0) / L.w.length; } else lines.push({ yc: w.yc, w: [w] }); }
-  return cleanOcr(lines.sort((a, b) => a.yc - b.yc).map(L => { const ww = L.w.sort((a, b) => a.x0 - b.x0); let s = ww[0].t;
-    for (let i = 1; i < ww.length; i++) s += (ww[i].x0 - ww[i - 1].x1 < mh * 0.25 ? "" : " ") + ww[i].t; return s; }).join("\n"));
-}
-
 $("#btnStopScan").onclick = () => { ocrStop = true; };
 $("#btnIdentify").onclick = async () => {
-  $("#scanErr").hidden = true; ocrStop = false;
+  $("#scanErr").hidden = true; $("#modeHint").hidden = true; ocrStop = false;
   if (!matcher) { showScanErr("The card list is still loading. Try again in a moment."); return; }
   const st = $("#scanStatusTxt");
   $("#btnIdentify").disabled = true; $("#scanStatus").hidden = false;
   st.textContent = ocrWorkerP ? "Starting the reader…" : "Loading the reader (the first time takes a little while)…";
-  const found = new Map(); const leftovers = new Set();
+  const found = new Map(); const leftovers = new Set(); const notes = []; let hint = null;
   try {
     let worker;
     try { worker = await getOcr(); } catch (e) { throw { code: "ocr_load", message: String(e && e.message || e) }; }
     try { await worker.setParameters({ tessedit_pageseg_mode: "11" }); } catch (e) {}
+    const scanner = S.scanMode === "grid" ? ScanGrid : ScanStacked;
     for (let i = 0; i < S.photos.length; i++) {
-      if (ocrStop) throw { code: "cancelled" };
-      const lbl = S.photos.length > 1 ? `Photo ${i + 1} of ${S.photos.length}` : "Reading the names";
-      const img = await loadImg(S.photos[i].file);
-      ocrPct = null;
+      const lbl = S.photos.length > 1 ? `Photo ${i + 1} of ${S.photos.length}` : (S.scanMode === "grid" ? "Grid" : "Stack");
+      // Everything a scanner needs: the reader, the card list, and a way to report progress or stop.
+      const ctx = {
+        worker, matcher, psm: 11,
+        check: () => { if (ocrStop) throw { code: "cancelled" }; },
+        status: t => { st.textContent = `${lbl}: ${t}`; },
+        progress: p => { st.textContent = `${lbl}: checking the whole photo… ${Math.round(p * 100)}%`; }
+      };
+      ctx.check();
+      const img = await ScanCore.loadImg(S.photos[i].file);
       const manual = S.photos[i].rot;
-      const deg = manual != null ? manual : await findTextDirection(worker, img, () => { st.textContent = `${lbl}: finding which way the names run…`; });
-      const upright = deg ? rotated(img, deg) : img;
-      const readings = [], barReadings = [];
-      // 1. Find the name bars and read each one on its own (one line of text per bar).
-      st.textContent = `${lbl}: finding the name bars…`;
-      const bars = detectBars(upright);
-      if (bars.length) {
-        await worker.setParameters({ tessedit_pageseg_mode: "7" });
-        const a = [], b = [], retry = [];
-        for (let n = 0; n < bars.length; n++) {
-          if (ocrStop) throw { code: "cancelled" };
-          st.textContent = `${lbl}: reading name ${n + 1} of ${bars.length}…`;
-          a.push(cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu"), {}, { text: true })).data.text));
-          // Only read the second clean-up version when the first wasn't a confident match.
-          const first = barMatches(a[n]);
-          b.push(first && first.score >= 0.95 ? a[n] : cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0.15, "local"), {}, { text: true })).data.text));
-          if (!barMatches(a[n]) && !barMatches(b[n]) && !CardMatcher.clearlyNotName(a[n]) && !CardMatcher.clearlyNotName(b[n])) retry.push(n);
-        }
-        // Bars that didn't give a card name (decorated frames, art at the edge): read them again, bigger,
-        // in scattered-text mode, and keep only the line that best matches a real card.
-        if (retry.length) {
-          await worker.setParameters({ tessedit_pageseg_mode: "11" });
-          // Strips that gave the most letters first: real names usually do, table and artwork usually don't.
-          const letters = n => ((a[n] + " " + b[n]).match(/[A-Za-z]/g) || []).length;
-          retry.sort((p, q) => (bars[q].dark - bars[p].dark) || (letters(q) - letters(p)));   // dark bars first
-          for (const n of retry.slice(0, 8)) {
-            if (ocrStop) throw { code: "cancelled" };
-            st.textContent = `${lbl}: taking a closer look at a name…`;
-            const text = cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu", 120), {}, { text: true })).data.text);
-            let best = null;
-            for (const line of text.split("\n")) { const m = barMatches(line); if (m && m.score >= 0.85 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.m.score)) best = { line, m }; }
-            if (best) a[n] = best.line;
-          }
-        }
-        await worker.setParameters({ tessedit_pageseg_mode: "11" });
-        barReadings.push(a.join("\n"), b.join("\n"));
-      }
-      // 2. Also read the whole photo, to catch any card whose bar wasn't found.
-      const vars = bars.length ? [prepCanvas(upright, 3000, true)] : [prepCanvas(upright, 3000, true), prepCanvas(upright, 2200, false)];
-      for (let v = 0; v < vars.length; v++) {
-        if (ocrStop) throw { code: "cancelled" };
-        ocrPct = p => { st.textContent = `${lbl}… ${Math.round((v + p) / vars.length * 100)}%`; };
-        st.textContent = `${lbl}…`;
-        const { data } = await worker.recognize(vars[v], { rotateAuto: true }, { text: true, blocks: true });
-        readings.push(cleanOcr(data && data.text));
-        if (v === 0) readings.push(regroupWords(data));
-      }
-      // Bar readings are names only. The whole-photo reading also contains rules text, flavor text and artwork,
-      // so when bars were found it only adds clear, whole-line matches of full card names.
-      const res = CardMatcher.countFromReadings(matcher, barReadings, { oneNamePerLine: true });
-      const whole = CardMatcher.countFromReadings(matcher, readings, { strict: barReadings.length > 0 });
-      for (const c of whole.cards) { const f = res.cards.find(x => x.name === c.name); if (f) f.qty = Math.max(f.qty, c.qty); else res.cards.push(c); }
-      if (!barReadings.length) res.leftovers.push(...whole.leftovers);
+      ctx.status("finding which way the names run…");
+      const deg = manual != null ? manual : await ScanCore.findTextDirection(ctx, img);
+      const upright = deg ? ScanCore.rotated(img, deg) : img;
+      const res = await scanner.scan(ctx, upright);
+      if (res.grid && !res.hint) notes.push(`${S.photos.length > 1 ? `Photo ${i + 1}: ` : ""}found a grid of ${res.grid.rows} × ${res.grid.cols}.`);
+      if (res.hint) hint = res.hint;
       for (const c of res.cards) { const f = found.get(c.name); if (f) { f.qty += c.qty; f.score = Math.min(f.score, c.score); } else found.set(c.name, { name: c.name, qty: c.qty, score: c.score }); }
       res.leftovers.forEach(l => leftovers.add(l));
     }
     S.review = [...found.values()].map(c => ({ name: c.name, qty: c.qty, low: c.score < 0.95 }));
     S.leftovers = [...leftovers];
-    if (!S.review.length) showScanErr(S.leftovers.length ? "No card names matched. Check the unmatched text below, or retake the photo closer and sharper." : "No names could be read. Get closer so the name bars fill the frame, keep them in focus, and avoid glare.");
+    $("#scanNote").textContent = notes.join(" "); $("#scanNote").hidden = !notes.length;
+    // The photo looks like the other layout: offer to scan it again that way.
+    $("#modeHint").hidden = !hint;
+    if (hint) {
+      $("#modeHintTxt").textContent = hint === "grid" ? "This photo looks like cards side by side in a grid." : "This photo looks like a stack of cards.";
+      $("#btnSwitchMode").textContent = hint === "grid" ? "Scan again as Grid" : "Scan again as Stacked";
+      $("#btnSwitchMode").onclick = () => { S.scanMode = hint; lsSet("mtg.scanMode", hint); renderScanMode(); $("#modeHint").hidden = true; S.review = []; S.leftovers = []; renderReview(); $("#btnIdentify").click(); };
+    }
+    if (!S.review.length) showScanErr(S.leftovers.length ? "No card names matched. Check the unmatched text below, or retake the photo closer and sharper." : "No names could be read. Check the layout setting, keep the names in focus, and avoid glare.");
     renderReview(true);
   } catch (e) {
     if (e && e.code === "cancelled") {}
@@ -388,6 +264,13 @@ $("#btnIdentify").onclick = async () => {
     else showScanErr("Something went wrong while reading. Try again. (" + esc(e && e.message || e) + ")");
   } finally { $("#btnIdentify").disabled = false; $("#scanStatus").hidden = true; ocrPct = null; }
 };
+
+/* ---------- SCAN: layout picker ---------- */
+function renderScanMode() {
+  document.querySelectorAll("#modeSeg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === S.scanMode)));
+  $("#tipsStacked").hidden = S.scanMode !== "stacked"; $("#tipsGrid").hidden = S.scanMode !== "grid";
+}
+$("#modeSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.scanMode = b.dataset.mode; lsSet("mtg.scanMode", S.scanMode); renderScanMode(); };
 function showScanErr(msg) { $("#scanErr").textContent = msg; $("#scanErr").hidden = false; }
 
 /* ---------- SCAN: review ---------- */
@@ -969,6 +852,7 @@ S.target = lsGet("mtg.target", S.order[0]); S.view = lsGet("mtg.view", "all"); S
 renderColSelects(); persist();
 S.decks = lsGet("mtg.decks", []) || [];
 S.engine = lsGet("mtg.engine", "claude");
+S.scanMode = lsGet("mtg.scanMode", "stacked") === "grid" ? "grid" : "stacked"; renderScanMode();
 renderHeader(); renderSaved(); renderEngine();
 if (!totals().n) $("#layoutTips").open = true;
 loadDB();

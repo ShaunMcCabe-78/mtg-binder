@@ -1,0 +1,91 @@
+/* Grid layout: cards laid side by side in rows (on a table, or a binder page).
+   1. Find bar candidates, then work out the grid: columns of cards, and rows of name bars one card-height apart.
+      Only the name bar of each card is read, so type lines, text boxes and artwork are ignored.
+   2. A cell whose name bar wasn't detected gets a predicted position and is still read.
+   3. Each cell is one card. */
+(function (root) {
+  "use strict";
+  const C = () => root.ScanCore;
+  const CARD_RATIO = 88 / 63;          // Magic cards are 63 x 88 mm
+  const BAR_OF_CARD = 0.89;            // the name bar spans most of the card's width
+
+  /* Work out where every card's name bar is. bars: candidates in photo pixels; W,H: photo size.
+     Returns { cells: [{ row, col, box, predicted }], cols, pitch } or null if no grid could be found. */
+  function layoutGrid(bars, W, H) {
+    const core = C();
+    if (!bars.length) return null;
+    const medW = core.median(bars.map(b => b.x1 - b.x0));
+    const good = bars.filter(b => (b.x1 - b.x0) >= medW * 0.6 && (b.x1 - b.x0) <= medW * 1.5);
+    let cols = core.columnsOf(good).filter(c => (c.x1 - c.x0) >= medW * 0.7 && (c.x1 - c.x0) <= medW * 1.4);
+    if (!cols.length) return null;
+    const barW = core.median(cols.map(c => c.x1 - c.x0));
+    const barH = core.median(good.map(b => b.y1 - b.y0));
+    let pitch = barW / BAR_OF_CARD * CARD_RATIO * 1.02;   // one card height plus a small gap
+
+    // First row: the highest top that at least half of the columns share.
+    const near = (y, col, tol) => col.bars.reduce((best, b) => { const d = Math.abs(b.y0 - y); return d < tol && (!best || d < Math.abs(best.y0 - y)) ? b : best; }, null);
+    const tops = cols.map(c => c.bars[0].y0).sort((p, q) => p - q);
+    let y0 = tops[0];
+    for (const t of tops) { if (cols.filter(c => near(t, c, barH * 1.5)).length >= Math.ceil(cols.length / 2)) { y0 = t; break; } }
+
+    const lastBar = Math.max(...good.map(b => b.y0));
+    const cells = [];
+    let Y = y0, first = null;
+    for (let row = 0; row < 12 && Y + barH <= H; row++) {
+      const found = cols.map(c => near(Y, c, pitch * 0.15));
+      const hits = found.filter(Boolean);
+      if (!hits.length) { if (Y > lastBar) break; }
+      else {
+        Y = core.median(hits.map(b => b.y0));
+        if (first == null) first = Y; else if (row > 0) pitch = (Y - first) / row;
+      }
+      cols.forEach((c, col) => {
+        const b = found[col];
+        cells.push(b ? { row, col, box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
+          : { row, col, box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
+      });
+      Y += pitch;
+    }
+    // Many bars in one column, closer together than a card height: that's a stack, not a grid.
+    const stackLike = cols.length === 1 && cols[0].bars.filter((b, i, arr) => i > 0 && b.y0 - arr[i - 1].y0 < pitch * 0.5).length >= 2;
+    return { cells, cols: cols.length, pitch, barH, stackLike };
+  }
+
+  async function scan(ctx, src) {
+    const core = C();
+    ctx.status("finding the cards…");
+    const [W, H] = core.dimsOf(src);
+    const grid = layoutGrid(core.detectBars(src), W, H);
+    if (!grid) return root.ScanStacked.scan(ctx, src);   // no grid found: fall back to the general method
+
+    const counts = new Map(), scores = new Map(), leftovers = [];
+    const add = m => { counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score)); };
+    let n = 0;
+    for (const cell of grid.cells) {
+      ctx.check(); n++;
+      ctx.status(`reading card ${n} of ${grid.cells.length}…`);
+      let match = null, seen = "";
+      if (!cell.predicted) {
+        const r = await core.readBar(ctx, src, cell.box);
+        match = r.match; seen = r.a || r.b;
+      }
+      if (!match) {
+        // Not detected, or didn't read as a name: look again, a little taller in case the position is slightly off.
+        const pad = cell.predicted ? grid.barH * 0.6 : 0;
+        const box = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, cell.box.y0 - pad), y1: Math.min(H, cell.box.y1 + pad), dark: cell.box.dark };
+        const line = await core.closerLook(ctx, src, box);
+        if (line) match = core.barMatch(ctx.matcher, line);
+        if (!match && cell.predicted) { const r = await core.readBar(ctx, src, cell.box); match = r.match; seen = seen || r.a || r.b; }
+      }
+      if (match) add(match);
+      else if (!cell.predicted && seen && !CardMatcher.clearlyNotName(seen)) leftovers.push(seen.split("\n")[0]);
+    }
+    const rows = Math.max(0, ...grid.cells.map(c => c.row)) + 1;
+    // A single column with bars much closer together than a card height is really a stack.
+    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name) })), leftovers, grid: { rows, cols: grid.cols } };
+    if (grid.cols === 1 && grid.stackLike) res.hint = "stacked";
+    return res;
+  }
+
+  root.ScanGrid = { scan, layoutGrid };
+})(typeof self !== "undefined" ? self : this);
