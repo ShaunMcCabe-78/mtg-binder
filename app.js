@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.10.0";
+const APP_VERSION = "1.10.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -990,8 +990,16 @@ function deckValueHTML(d) {
   if (!v && !missing) return "";
   return `<p class="small muted">Deck value ≈ <b>${fmtEur(v)}</b>${missing ? ` · ${missing} card${missing === 1 ? "" : "s"} without a price` : ""} · Cardmarket prices via Scryfall</p>`;
 }
+// A card name in a deck list: tappable (opens the card) when it's in your collection.
+let ownedNow = {};   // filled when a deck is drawn
+function cardLink(name) {
+  const k = keyOf(name);
+  return ownedNow[k] ? `<button class="nm dlink" data-card="${esc(k)}"><b>${esc(name)}</b></button>` : `<span class="nm"><b>${esc(name)}</b></span>`;
+}
+$("#deckOut").addEventListener("click", e => { const b = e.target.closest("[data-card]"); if (b) openCard(b.dataset.card); });
 function renderDeck() {
   const d = S.deck; const out = $("#deckOut"); if (!d) { out.innerHTML = ""; return; }
+  ownedNow = merged("all");
   const groups = {}; d.cards.forEach(c => { const g = mainType(c.type); (groups[g] = groups[g] || []).push(c); });
   const landCount = Object.values(d.lands).reduce((a, b) => a + b, 0) + (groups.land || []).reduce((a, c) => a + c.qty, 0);
   const creatures = (groups.creature || []).reduce((a, c) => a + c.qty, 0);
@@ -1011,14 +1019,14 @@ function renderDeck() {
     if (!list.length && !basics.length) continue;
     const n = list.reduce((a, c) => a + c.qty, 0) + basics.reduce((a, [, q]) => a + q, 0);
     html += `<div class="group"><h3>${label} (${n})</h3><div class="list">` +
-      list.map(c => `<div class="drow"><span class="q">${c.qty}</span><span class="nm"><b>${esc(c.name)}</b></span>${costHTML(c.manaCost)}${c.why ? `<span class="why">${esc(c.why)}</span>` : ""}</div>`).join("") +
-      basics.map(([nm, q]) => `<div class="drow"><span class="q">${q}</span><span class="nm"><b>${esc(nm)}</b></span><span class="small muted">basic</span></div>`).join("") + `</div></div>`;
+      list.map(c => `<div class="drow"><span class="q">${c.qty}</span>${cardLink(c.name)}${costHTML(c.manaCost)}${c.why ? `<span class="why">${esc(c.why)}</span>` : ""}</div>`).join("") +
+      basics.map(([nm, q]) => `<div class="drow"><span class="q">${q}</span>${cardLink(nm)}<span class="small muted">basic</span></div>`).join("") + `</div></div>`;
   }
   if ((d.howToPlay && d.howToPlay.length) || d.notes) html += `<div class="panel prose">${d.howToPlay.length ? `<h3>How to play it</h3><ul>${d.howToPlay.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}${d.notes ? `<h3>Notes</h3><p>${esc(d.notes)}</p>` : ""}</div>`;
   const lo = leftovers(d);
   html += `<details class="panel" id="leftDeck"><summary>Cards not in this deck (${lo.total})</summary>
     <p class="small muted">Everything you own in ${esc(lo.from)} that this deck doesn't use, grouped by color. Basic lands aren't listed.</p>
-    ${lo.groups.length ? lo.groups.map(g => `<div class="group"><h3>${esc(g.label)} (${g.n})</h3><div class="list">${g.cards.map(c => `<div class="drow"><span class="q">${c.qty}</span><span class="nm"><b>${esc(c.name)}</b></span>${costHTML(c.cost)}<span class="why">${esc(c.type || "")}</span></div>`).join("")}</div></div>`).join("") : `<p class="muted">This deck uses every card you own there.</p>`}
+    ${lo.groups.length ? lo.groups.map(g => `<div class="group"><h3>${esc(g.label)} (${g.n})</h3><div class="list">${g.cards.map(c => `<div class="drow"><span class="q">${c.qty}</span>${cardLink(c.name)}${costHTML(c.cost)}<span class="why">${esc(c.type || "")}</span></div>`).join("")}</div></div>`).join("") : `<p class="muted">This deck uses every card you own there.</p>`}
     ${lo.groups.length ? `<button id="btnCopyLeft">Copy leftover list</button><p class="small muted">Copies one card per line, sorted by color, ready to import into Draftsim, Arena or Moxfield.</p>` : ""}
   </details>`;
   html += `<div class="row"><button class="primary" id="btnCopyDeck" style="flex:1">Copy deck list</button><button id="btnSaveDeck"${d.saved ? " disabled" : ""}>${d.saved ? "Saved" : "Save deck"}</button></div>
