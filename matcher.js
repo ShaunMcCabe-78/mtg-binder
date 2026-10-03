@@ -52,13 +52,16 @@
     this.names = [];      // display names (full, e.g. "Fire // Ice")
     this.keys = [];       // matching keys (one per face too)
     this.owner = [];      // key index -> name index
+    this.face = [];       // key index -> true when it is only one half of a split/double card ("Rise" of "Rise // Fall")
+    this.faceOnly = new Set();
     this.exact = new Map();
     this.index = new Map();
-    const add = (display, k) => {
+    const add = (display, k, isFace) => {
       if (k.length < 2) return;
       const ki = this.keys.length;
-      this.keys.push(k); this.owner.push(this.names.length - 1);
-      if (!this.exact.has(k)) this.exact.set(k, this.names.length - 1);
+      this.keys.push(k); this.owner.push(this.names.length - 1); this.face.push(!!isFace);
+      if (!this.exact.has(k)) { this.exact.set(k, this.names.length - 1); if (isFace) this.faceOnly.add(k); }
+      else if (!isFace) this.faceOnly.delete(k);
       for (const g of trigrams(k)) {
         let a = this.index.get(g);
         if (!a) { a = []; this.index.set(g, a); }
@@ -69,16 +72,22 @@
       if (!n) continue;
       this.names.push(n);
       add(n, key(n));
-      if (n.includes(" // ")) for (const face of n.split(" // ")) add(n, key(face));
+      if (n.includes(" // ")) for (const face of n.split(" // ")) add(n, key(face), true);
     }
   }
 
   // Best real card name for one OCR line, or null.
   // Returns {name, score (0-1), exact}
-  Matcher.prototype.matchLine = function (line) {
+  // opts.strict: for text read from the whole photo (rules text, flavor text, artwork), only accept clear,
+  // whole-line matches of full card names.
+  Matcher.prototype.matchLine = function (line, opts) {
+    const strict = !!(opts && opts.strict);
     const q = key(line);
     if (q.length < 3) return null;
-    if (this.exact.has(q)) return { name: this.names[this.exact.get(q)], score: 1, exact: true };
+    if (this.exact.has(q)) {
+      if (strict && (this.faceOnly.has(q) || q.length < 7)) return null;
+      return { name: this.names[this.exact.get(q)], score: 1, exact: true };
+    }
     const counts = new Map();
     const qg = trigrams(q);
     for (const g of qg) {
@@ -104,6 +113,9 @@
       const cover = k.length / q.length;     // how much of the line the name explains
       const short = k.length < 6;
       if (short ? (d > 0 || cover < 0.6) : (score < 0.78 || cover < 0.45)) continue;
+      // Half of a split card ("Invent", "Rise") only counts when read exactly, never as a near miss.
+      if (this.face[ki] && d > 0) continue;
+      if (strict && (this.face[ki] || k.length < 7 || score < 0.9 || (k.length - d) / Math.max(q.length, k.length) < 0.7)) continue;
       // Prefer the name that explains most of the line, so "S.H.I.E.L.D. Spy Kit" beats the shorter card "Spy Kit"
       // and "Black Widow, Double Agent" beats a partial match.
       const explained = (k.length - d) / Math.max(q.length, k.length);
@@ -125,7 +137,7 @@
     const res = [];
     for (const [ki, c] of counts) {
       const k = this.keys[ki];
-      if (k.length <= q.length || c / (q.length + 2) < 0.45) continue;
+      if (this.face[ki] || k.length <= q.length || c / (q.length + 2) < 0.45) continue;
       const { d } = fitDistance(q, k.slice(0, q.length + 2));
       if (d <= Math.max(1, Math.floor(q.length * 0.15))) res.push([this.owner[ki], d]);
     }
@@ -163,29 +175,46 @@
   /* Turn the readings of one photo into card counts.
      readings: array of text blocks (each block = several lines) that all show the SAME cards.
      Each matched line is one card; a card's count is the most times it was seen in any single reading. */
-  function countFromReadings(matcher, readings) {
+  // Type lines ("Sorcery", "Creature — Human Soldier") sit in bars that look like name bars.
+  const TYPE_LINE = /^[^A-Za-z]*(?:(?:[Ll]egendary|[Bb]asic|[Ss]now|[Ww]orld|[Kk]indred|[Tt]ribal)\s+)*(?:[Aa]rtifact|[Ee]nchantment|[Cc]reature|[Ll]and|[Pp]laneswalker|[Ii]nstant|[Ss]orcery|[Bb]attle)(?:\s+(?:[Aa]rtifact|[Cc]reature|[Ll]and))*(?:\s*[—–\-~]|\s*$|\s+[^A-Z])/;
+  const SMALL = /^(a|an|and|at|by|for|from|in|into|of|on|or|over|the|to|upon|with|within|without|under|beyond|through|between|against|among|before|after|vs)$/;
+  // Rules and flavor text read like sentences: they start in lowercase, end with a full stop, or have several lowercase words.
+  function looksLikeSentence(line) {
+    const t = line.replace(/^[^A-Za-z]+/, "");
+    if (/^[a-z]/.test(t)) return true;
+    if (/[a-z]{2,}[.:;]\W*$/.test(t)) return true;
+    const low = (t.match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !SMALL.test(w));
+    return low.length >= 2;
+  }
+
+  // opts.strict: the readings are of the whole photo, so ignore sentence-like lines and accept only clear matches.
+  // opts.oneNamePerLine: each line is one name bar, so never join lines.
+  function countFromReadings(matcher, readings, opts) {
+    const strict = !!(opts && opts.strict);
     const counts = new Map(), scores = new Map(), unmatched = new Map();
     for (const text of readings) {
       const here = new Map();
-      const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(l => l && !TYPE_LINE.test(l) && !(strict && looksLikeSentence(l)));
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        let m = matcher.matchLine(line);
+        let m = matcher.matchLine(line, opts);
         // A long name split over two lines: try it joined with the next line.
-        if ((!m || m.score < 0.9) && i + 1 < lines.length) {
-          const j = matcher.matchLine(line + " " + lines[i + 1]);
+        // (Not for name-bar readings: each bar holds exactly one name.)
+        if (!(opts && opts.oneNamePerLine) && (!m || m.score < 0.9) && i + 1 < lines.length) {
+          const j = matcher.matchLine(line + " " + lines[i + 1], opts);
           if (j && j.score >= 0.9 && (!m || j.score > m.score) && key(j.name).length > key(line).length + 2) {
-            const nextAlone = matcher.matchLine(lines[i + 1]);
-            if (!nextAlone || nextAlone.name === j.name) { m = j; i++; }
+            const nextAlone = matcher.matchLine(lines[i + 1], opts);
+            // Only join when the next line isn't already a good match on its own.
+            if (!nextAlone || (nextAlone.name === j.name && nextAlone.score < 0.9)) { m = j; i++; }
           }
         }
-        if (!m) m = matcher.matchPrefix(line);
+        if (!m && !strict) m = matcher.matchPrefix(line);
         if (m) {
           here.set(m.name, (here.get(m.name) || 0) + 1);
           scores.set(m.name, Math.max(scores.get(m.name) || 0, m.score));
         } else {
           const letters = (line.match(/[A-Za-z]/g) || []).length;
-          if (letters >= 8 && letters / line.replace(/\s/g, "").length >= 0.75) unmatched.set(key(line), line);
+          if (!strict && letters >= 8 && letters / line.replace(/\s/g, "").length >= 0.75) unmatched.set(key(line), line);
         }
       }
       for (const [n, c] of here) counts.set(n, Math.max(counts.get(n) || 0, c));

@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.4.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -261,6 +261,8 @@ function cleanOcr(text) {
 }
 // Rebuild lines from word positions so names split into pieces are joined back up.
 /* ---------- name bars: find each card's name strip and read it on its own ---------- */
+// Does this line read as a card name? (a full name, or a clear start of one)
+function barMatches(line) { if (!line || !matcher) return null; const l = line.split("\n")[0]; return matcher.matchLine(l) || matcher.matchPrefix(l); }
 function detectBars(src) {
   const [W, H] = dimsOf(src); const sc = Math.min(1, 1000 / Math.max(W, H));
   const w = Math.round(W * sc), h = Math.round(H * sc);
@@ -271,17 +273,20 @@ function detectBars(src) {
   return NameBars.findBars(g, w, h).map(b => ({ x0: b.x0 / sc, y0: b.y0 / sc, x1: b.x1 / sc, y1: b.y1 / sc }));
 }
 // Cut one bar out of the full-size photo at ~60 px tall, clean it up, and put a white margin round it.
-function cropBar(src, b, trimRight, mode) {
+function cropBar(src, b, trimRight, mode, height) {
   const bh = b.y1 - b.y0, pad = bh * 0.1, sw = (b.x1 - b.x0) * (1 - trimRight), sh = bh + 2 * pad;
   const [W, H] = dimsOf(src); const sy = Math.max(0, b.y0 - pad), sx = Math.max(0, b.x0);
-  const sc = 60 / bh, dw = Math.max(1, Math.round(sw * sc)), dh = Math.max(1, Math.round(Math.min(sh, H - sy) * sc)), M = 20;
+  const sc = (height || 60) / bh, dw = Math.max(1, Math.round(sw * sc)), dh = Math.max(1, Math.round(Math.min(sh, H - sy) * sc)), M = 20;
   const c = document.createElement("canvas"); c.width = dw + 2 * M; c.height = dh + 2 * M;
   const x = c.getContext("2d", { willReadFrequently: true });
   x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.imageSmoothingQuality = "high";
   x.drawImage(src, sx, sy, Math.min(sw, W - sx), Math.min(sh, H - sy), M, M, dw, dh);
   const img = x.getImageData(M, M, dw, dh), d = img.data, g = new Uint8Array(dw * dh);
   for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
-  const st = NameBars.stretch(g); const bw = mode === "local" ? NameBars.localMean(st, dw, dh, 49, 10) : NameBars.otsu(st);
+  let st = NameBars.stretch(g);
+  // Most bars are dark text on a light strip; a few frames use light text on a dark strip. Flip those.
+  const sorted = Array.from(st).sort((p, q) => p - q); if (sorted[sorted.length >> 1] < 110) st = st.map(v => 255 - v);
+  const bw = mode === "local" ? NameBars.localMean(st, dw, dh, 49, 10) : NameBars.otsu(st);
   for (let i = 0, j = 0; j < bw.length; i += 4, j++) { d[i] = d[i + 1] = d[i + 2] = bw[j]; d[i + 3] = 255; }
   x.putImageData(img, M, M);
   return c;
@@ -318,21 +323,37 @@ $("#btnIdentify").onclick = async () => {
       const manual = S.photos[i].rot;
       const deg = manual != null ? manual : await findTextDirection(worker, img, () => { st.textContent = `${lbl}: finding which way the names run…`; });
       const upright = deg ? rotated(img, deg) : img;
-      const readings = [];
+      const readings = [], barReadings = [];
       // 1. Find the name bars and read each one on its own (one line of text per bar).
       st.textContent = `${lbl}: finding the name bars…`;
       const bars = detectBars(upright);
       if (bars.length) {
         await worker.setParameters({ tessedit_pageseg_mode: "7" });
-        const a = [], b = [];
+        const a = [], b = [], retry = [];
         for (let n = 0; n < bars.length; n++) {
           if (ocrStop) throw { code: "cancelled" };
           st.textContent = `${lbl}: reading name ${n + 1} of ${bars.length}…`;
           a.push(cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu"), {}, { text: true })).data.text));
-          b.push(cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0.15, "local"), {}, { text: true })).data.text));
+          // Only read the second clean-up version when the first wasn't a confident match.
+          const first = barMatches(a[n]);
+          b.push(first && first.score >= 0.95 ? a[n] : cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0.15, "local"), {}, { text: true })).data.text));
+          if (!barMatches(a[n]) && !barMatches(b[n])) retry.push(n);
+        }
+        // Bars that didn't give a card name (decorated frames, art at the edge): read them again, bigger,
+        // in scattered-text mode, and keep only the line that best matches a real card.
+        if (retry.length) {
+          await worker.setParameters({ tessedit_pageseg_mode: "11" });
+          for (const n of retry.slice(0, 6)) {
+            if (ocrStop) throw { code: "cancelled" };
+            st.textContent = `${lbl}: taking a closer look at a name…`;
+            const text = cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu", 120), {}, { text: true })).data.text);
+            let best = null;
+            for (const line of text.split("\n")) { const m = barMatches(line); if (m && m.score >= 0.85 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.m.score)) best = { line, m }; }
+            if (best) a[n] = best.line;
+          }
         }
         await worker.setParameters({ tessedit_pageseg_mode: "11" });
-        readings.push(a.join("\n"), b.join("\n"));
+        barReadings.push(a.join("\n"), b.join("\n"));
       }
       // 2. Also read the whole photo, to catch any card whose bar wasn't found.
       const vars = bars.length ? [prepCanvas(upright, 3000, true)] : [prepCanvas(upright, 3000, true), prepCanvas(upright, 2200, false)];
@@ -344,7 +365,12 @@ $("#btnIdentify").onclick = async () => {
         readings.push(cleanOcr(data && data.text));
         if (v === 0) readings.push(regroupWords(data));
       }
-      const res = CardMatcher.countFromReadings(matcher, readings);
+      // Bar readings are names only. The whole-photo reading also contains rules text, flavor text and artwork,
+      // so when bars were found it only adds clear, whole-line matches of full card names.
+      const res = CardMatcher.countFromReadings(matcher, barReadings, { oneNamePerLine: true });
+      const whole = CardMatcher.countFromReadings(matcher, readings, { strict: barReadings.length > 0 });
+      for (const c of whole.cards) { const f = res.cards.find(x => x.name === c.name); if (f) f.qty = Math.max(f.qty, c.qty); else res.cards.push(c); }
+      if (!barReadings.length) res.leftovers.push(...whole.leftovers);
       for (const c of res.cards) { const f = found.get(c.name); if (f) { f.qty += c.qty; f.score = Math.min(f.score, c.score); } else found.set(c.name, { name: c.name, qty: c.qty, score: c.score }); }
       res.leftovers.forEach(l => leftovers.add(l));
     }
