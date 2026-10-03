@@ -87,10 +87,11 @@
     for (const cell of grid.cells) {
       ctx.check(); n++;
       ctx.status(`reading card ${n} of ${grid.cells.length}…`);
-      let match = null, seen = "";
+      let match = null, seen = "", guessed = false;
+      const texts = [];   // everything read for this cell, for a best guess at the end
       if (!cell.predicted) {
         const r = await core.readBar(ctx, src, cell.box);
-        match = r.match; seen = r.a || r.b;
+        match = r.match; seen = r.a || r.b; texts.push(r.a, r.b);
       }
       if (!match) {
         // Not detected, or didn't read as a name: look again, a little taller in case the position is slightly off.
@@ -100,19 +101,30 @@
         const line = await core.closerLook(ctx, src, box);
         if (line) match = core.barMatch(ctx.matcher, line);
         if (!match && cell.predicted) { const r = await core.readBar(ctx, src, cell.box); match = r.match; seen = seen || r.a || r.b; }
-        // Its bar was found out of line with the row (an ornate frame above the name, say): read where the row's names are.
-        if (!match && cell.rowY != null && Math.abs(cell.box.y0 - cell.rowY) > grid.barH * 0.3) {
-          // Some frames put the name lower, under an ornament, so try a few heights around the row.
-          // Leave out the right side: the mana cost and frame ornaments there throw off the black-and-white cleanup.
-          const bh = grid.barH;
+        // Still nothing: try a few heights around where the name should be (some frames put it lower, under an ornament).
+        // Leave out the right side: the mana cost and frame ornaments there throw off the black-and-white cleanup.
+        const offLine = cell.rowY != null && Math.abs(cell.box.y0 - cell.rowY) > grid.barH * 0.3;
+        if (!match && (!cell.predicted || offLine)) {
+          const bh = grid.barH, base = offLine ? cell.rowY : cell.box.y0;
           tries: for (const dy of [0, 0.4, 0.8, -0.3]) {
-            const rb = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, cell.rowY + (dy - 0.15) * bh), y1: Math.min(H, cell.rowY + (dy + 1.25) * bh) };
+            const rb = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, base + (dy - 0.15) * bh), y1: Math.min(H, base + (dy + 1.25) * bh) };
             for (const mode of ["otsu", "local"]) {
               const t = await core.recognize(ctx, core.cropBar(src, rb, 0.4, mode, 80), 7);
+              texts.push(t);
               match = core.barMatch(ctx.matcher, t);
               if (match) break tries;
             }
           }
+        }
+        // A detected card whose name never read cleanly: offer the closest card name as a guess, marked "check".
+        if (!match && !cell.predicted) {
+          let best = null;
+          for (const t of texts) for (const line of String(t || "").split("\n")) {
+            if (!CardMatcher.usableBarLine(line) || CardMatcher.isTypeLine(line)) continue;
+            const m = ctx.matcher.matchLine(line, { relaxed: true });
+            if (m && m.score >= 0.7 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.score)) best = m;
+          }
+          if (best) { match = { ...best, score: Math.min(best.score, 0.9) }; guessed = true; }
         }
       }
       let printing = null;
@@ -120,6 +132,8 @@
         // The whole card shows in a grid, so the small print and set symbol can say which printing it is.
         ctx.status(`reading card ${n} of ${grid.cells.length} (set)…`);
         try { printing = await root.ScanSet.identify(ctx, src, cell.box, match.name, unit); } catch (e) { if (e && e.code === "cancelled") throw e; }
+        // A guessed name confirmed by its own collector number in the small print is no longer a guess.
+        if (guessed && printing && printing.how === "code" && /:\S/.test(printing.key)) match = { ...match, score: 0.95 };
       }
       if (match) add(match, printing);
       else if (!cell.predicted && seen && !CardMatcher.clearlyNotName(seen)) leftovers.push(seen.split("\n")[0]);
