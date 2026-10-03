@@ -134,7 +134,9 @@
     if (!line || !matcher) return null;
     const l = line.split("\n")[0];
     if (!CardMatcher.usableBarLine(l)) return null;
-    return matcher.matchLine(l) || matcher.matchPrefix(l);
+    const m = matcher.matchLine(l);
+    if (m && !CardMatcher.startsMidWord(l, m)) return m;
+    return matcher.matchPrefix(l);
   }
 
   async function recognize(ctx, canvas, psm) {

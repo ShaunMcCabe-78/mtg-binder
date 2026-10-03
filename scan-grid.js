@@ -10,46 +10,98 @@
   const BAR_OF_CARD = 0.89;            // the name bar spans most of the card's width
 
   /* Work out where every card's name bar is. bars: candidates in photo pixels; W,H: photo size.
-     Returns { cells: [{ row, col, box, predicted }], cols, pitch } or null if no grid could be found. */
+     Returns { cells: [{ row, col, box, predicted, rowY, colX }], cols, pitch, barH, stackLike } or null if no grid could be found.
+     1. Columns: bars grouped by their centre; a column needs at least two bars (a stray strip of table can't make one).
+     2. Rows, per column: the bars that repeat at one card-height steps (names; stray strips don't fit the pattern).
+        Each column keeps its own row positions, so cards that aren't perfectly level still line up. */
   function layoutGrid(bars, W, H) {
     const core = C();
     if (!bars.length) return null;
     const medW = core.median(bars.map(b => b.x1 - b.x0));
-    const good = bars.filter(b => (b.x1 - b.x0) >= medW * 0.6 && (b.x1 - b.x0) <= medW * 1.5);
-    let cols = core.columnsOf(good).filter(c => (c.x1 - c.x0) >= medW * 0.7 && (c.x1 - c.x0) <= medW * 1.4);
-    if (!cols.length) return null;
-    const barW = core.median(cols.map(c => c.x1 - c.x0));
-    const barH = core.median(good.map(b => b.y1 - b.y0));
-    let pitch = barW / BAR_OF_CARD * CARD_RATIO * 1.02;   // one card height plus a small gap
-
-    // First row: the highest top that at least half of the columns share.
-    const near = (y, col, tol) => col.bars.reduce((best, b) => { const d = Math.abs(b.y0 - y); return d < tol && (!best || d < Math.abs(best.y0 - y)) ? b : best; }, null);
-    const tops = cols.map(c => c.bars[0].y0).sort((p, q) => p - q);
-    let y0 = tops[0];
-    for (const t of tops) { if (cols.filter(c => near(t, c, barH * 1.5)).length >= Math.ceil(cols.length / 2)) { y0 = t; break; } }
-
-    const lastBar = Math.max(...good.map(b => b.y0));
-    const cells = [];
-    let Y = y0, first = null;
+    const good = bars.filter(b => (b.x1 - b.x0) >= medW * 0.7 && (b.x1 - b.x0) <= medW * 1.3);
+    if (!good.length) return null;
+    const barW = core.median(good.map(b => b.x1 - b.x0)), barH = core.median(good.map(b => b.y1 - b.y0));
     const cardH = barW / BAR_OF_CARD * CARD_RATIO;
-    // A row only counts if at least half its card fits in the photo (strips near the bottom are copyright lines, not names).
-    for (let row = 0; row < 12 && Y + barH <= H && Y + cardH * 0.5 <= H; row++) {
-      const found = cols.map(c => near(Y, c, pitch * 0.1));
-      const hits = found.filter(Boolean);
-      if (!hits.length) { if (Y > lastBar) break; }
-      else {
-        Y = core.median(hits.map(b => b.y0));
-        if (first == null) first = Y; else if (row > 0) pitch = (Y - first) / row;
-      }
-      cols.forEach((c, col) => {
-        const b = found[col];
-        // rowY: where this row's bars usually are, in case this cell's bar was found a little off (an ornate frame, say).
-        // colX: the column's usual left/right edges, in case this bar was found cut short or shifted sideways.
-        cells.push(b ? { row, col, rowY: Y, colX: [c.x0, c.x1], box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
-          : { row, col, rowY: Y, colX: [c.x0, c.x1], box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
-      });
-      Y += pitch;
+    const cx = b => (b.x0 + b.x1) / 2, cy = b => (b.y0 + b.y1) / 2;
+
+    // 1. Columns by centre.
+    let cols = [];
+    for (const b of good.slice().sort((p, q) => cx(p) - cx(q))) {
+      const c = cols.find(c => Math.abs(core.median(c.bars.map(cx)) - cx(b)) < barW * 0.35);
+      if (c) c.bars.push(b); else cols.push({ bars: [b] });
     }
+    cols = cols.filter(c => c.bars.length >= 2).map(c => ({ bars: c.bars.sort((p, q) => p.y0 - q.y0), x0: core.median(c.bars.map(b => b.x0)), x1: core.median(c.bars.map(b => b.x1)) }));
+    if (!cols.length) return null;
+
+    // 2. Runs: bars that repeat at one card-height steps within a column. Names and type lines both repeat like that,
+    //    so pick one reference run (most bars; its top bar has no bar half a card above it, as the type-line run's would),
+    //    then every column uses the bars in step with that reference.
+    const tol = cardH * 0.07, half = cardH * 0.53;
+    const runsOf = c => {
+      const ys = c.bars.map(cy), out = [];
+      for (let i = 0; i < ys.length; i++) for (let j = i + 1; j < ys.length; j++) {
+        let d = ys[j] - ys[i];
+        if (d >= cardH * 1.8 && d <= cardH * 2.6) d /= 2;   // a row in between wasn't detected
+        if (d < cardH * 0.95 || d > cardH * 1.3) continue;
+        const hit = [];
+        for (let k = 0; ys[i] + k * d < H; k++) { const m = c.bars.find(b => Math.abs(cy(b) - (ys[i] + k * d)) < tol); if (m) hit.push([k, m]); }
+        const above = c.bars.some(b => Math.abs(cy(b) - (ys[i] - half)) < tol * 1.5);
+        out.push({ y: ys[i], d, hit, score: hit.length * 10 - (above ? 15 : 0) });
+      }
+      return out;
+    };
+    const fit = h => h.length >= 2 ? (cy(h[h.length - 1][1]) - cy(h[0][1])) / (h[h.length - 1][0] - h[0][0]) : null;
+    const phaseOf = (y, y0, p) => { const f = (y - y0) / p; return Math.abs(f - Math.round(f)); };
+    for (const c of cols) c.runs = runsOf(c);
+    // The reference is the run the most bars across all columns agree with (a stray pattern in one column can't win),
+    // then its own score (the type-line run loses for having names above it), then the topmost.
+    let ref = null;
+    for (const c of cols) for (const r of c.runs) {
+      const p = fit(r.hit) || r.d;
+      r.agree = cols.reduce((sum, o) => sum + o.bars.filter(b => phaseOf(cy(b), r.y, p) < 0.12 && cy(b) > r.y - p * 0.5).length, 0);
+      if (!ref || r.agree * 10 + r.score > ref.agree * 10 + ref.score || (r.agree * 10 + r.score === ref.agree * 10 + ref.score && r.y < ref.y)) ref = r;
+    }
+    // Names and type lines repeat with the same spacing, half a card apart. If both patterns show, the names are the one
+    // that starts higher: the top row's names are above its type lines.
+    if (ref) {
+      const p = fit(ref.hit) || ref.d;
+      const top = (y0, pp) => core.median(cols.map(c => { const b = c.bars.find(b => phaseOf(cy(b), y0, pp) < 0.12); return b ? cy(b) : Infinity; }).filter(isFinite));
+      let other = null;
+      for (const c of cols) for (const r of c.runs) {
+        const f = (r.y - ref.y) / p, off = Math.abs(f - Math.round(f));
+        if (off > 0.35 && r.agree >= Math.max(3, ref.agree * 0.3) && (!other || r.agree > other.agree)) other = r;
+      }
+      if (other && top(other.y, fit(other.hit) || other.d) < top(ref.y, p)) ref = other;
+    }
+    const pitch = ref ? fit(ref.hit) || ref.d : cardH * 1.02;
+    const refY = ref ? ref.y : Math.min(...cols.map(c => cy(c.bars[0])));
+    const phase = y => phaseOf(y, refY, pitch);
+    for (const c of cols) {
+      // The column's own run in step with the reference, else its bars in step, else the reference's rows.
+      const err = r => r.hit.reduce((m, [, b]) => Math.max(m, phase(cy(b))), 0);   // worst bar's distance from the reference rows
+      const inStep = c.runs.filter(r => err(r) < 0.12).sort((p, q) => q.hit.length - p.hit.length || err(p) - err(q) || p.y - q.y)[0];
+      if (inStep) c.run = { y: inStep.y, d: fit(inStep.hit) || pitch, hit: inStep.hit };
+      else {
+        const b = c.bars.filter(b => phase(cy(b)) < 0.12).sort((p, q) => cy(p) - cy(q))[0];
+        c.run = { y: b ? cy(b) : refY, d: pitch, hit: b ? [[0, b]] : [] };
+      }
+      c.off = Math.round((c.run.y - refY) / pitch);
+    }
+    const minOff = Math.min(...cols.map(c => c.off));
+    for (const c of cols) c.off -= minOff;
+    // Rows: as far down as any column's card still mostly fits in the photo.
+    let rows = 0;
+    for (let r = 0; r < 12; r++) { if (cols.some(c => c.run.y + (r - c.off) * c.run.d - barH / 2 + cardH * 0.5 <= H && c.run.y + (r - c.off) * c.run.d >= 0)) rows = r + 1; else break; }
+
+    const cells = [];
+    for (let r = 0; r < rows; r++) cols.forEach((c, col) => {
+      const yc = c.run.y + (r - c.off) * c.run.d;
+      if (yc - barH / 2 < 0 || yc - barH / 2 + cardH * 0.5 > H) return;   // this column's card would be off the photo
+      const b = c.bars.find(b => Math.abs(cy(b) - yc) < tol);
+      const rowY = yc - barH / 2;
+      cells.push(b ? { row: r, col, rowY, colX: [c.x0, c.x1], box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
+        : { row: r, col, rowY, colX: [c.x0, c.x1], box: { x0: c.x0, x1: c.x1, y0: rowY, y1: rowY + barH }, predicted: true });
+    });
     // Many bars in one column, closer together than a card height: that's a stack, not a grid.
     const stackLike = cols.length === 1 && cols[0].bars.filter((b, i, arr) => i > 0 && b.y0 - arr[i - 1].y0 < pitch * 0.5).length >= 2;
     return { cells, cols: cols.length, pitch, barH, stackLike };
