@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.4.3";
+const APP_VERSION = "1.5.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -262,7 +262,7 @@ function cleanOcr(text) {
 // Rebuild lines from word positions so names split into pieces are joined back up.
 /* ---------- name bars: find each card's name strip and read it on its own ---------- */
 // Does this line read as a card name? (a full name, or a clear start of one)
-function barMatches(line) { if (!line || !matcher) return null; const l = line.split("\n")[0]; return matcher.matchLine(l) || matcher.matchPrefix(l); }
+function barMatches(line) { if (!line || !matcher) return null; const l = line.split("\n")[0]; if (!CardMatcher.usableBarLine(l)) return null; return matcher.matchLine(l) || matcher.matchPrefix(l); }
 function detectBars(src) {
   const [W, H] = dimsOf(src); const sc = Math.min(1, 1000 / Math.max(W, H));
   const w = Math.round(W * sc), h = Math.round(H * sc);
@@ -270,7 +270,7 @@ function detectBars(src) {
   x.drawImage(src, 0, 0, w, h);
   const d = x.getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
   for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
-  return NameBars.findBars(g, w, h).map(b => ({ x0: b.x0 / sc, y0: b.y0 / sc, x1: b.x1 / sc, y1: b.y1 / sc }));
+  return NameBars.findBars(g, w, h).map(b => ({ x0: b.x0 / sc, y0: b.y0 / sc, x1: b.x1 / sc, y1: b.y1 / sc, dark: !!b.dark }));
 }
 // Cut one bar out of the full-size photo at ~60 px tall, clean it up, and put a white margin round it.
 function cropBar(src, b, trimRight, mode, height) {
@@ -337,13 +337,16 @@ $("#btnIdentify").onclick = async () => {
           // Only read the second clean-up version when the first wasn't a confident match.
           const first = barMatches(a[n]);
           b.push(first && first.score >= 0.95 ? a[n] : cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0.15, "local"), {}, { text: true })).data.text));
-          if (!barMatches(a[n]) && !barMatches(b[n])) retry.push(n);
+          if (!barMatches(a[n]) && !barMatches(b[n]) && !CardMatcher.clearlyNotName(a[n]) && !CardMatcher.clearlyNotName(b[n])) retry.push(n);
         }
         // Bars that didn't give a card name (decorated frames, art at the edge): read them again, bigger,
         // in scattered-text mode, and keep only the line that best matches a real card.
         if (retry.length) {
           await worker.setParameters({ tessedit_pageseg_mode: "11" });
-          for (const n of retry.slice(0, 6)) {
+          // Strips that gave the most letters first: real names usually do, table and artwork usually don't.
+          const letters = n => ((a[n] + " " + b[n]).match(/[A-Za-z]/g) || []).length;
+          retry.sort((p, q) => (bars[q].dark - bars[p].dark) || (letters(q) - letters(p)));   // dark bars first
+          for (const n of retry.slice(0, 8)) {
             if (ocrStop) throw { code: "cancelled" };
             st.textContent = `${lbl}: taking a closer look at a name…`;
             const text = cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu", 120), {}, { text: true })).data.text);

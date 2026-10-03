@@ -81,7 +81,7 @@
   // opts.strict: for text read from the whole photo (rules text, flavor text, artwork), only accept clear,
   // whole-line matches of full card names.
   Matcher.prototype.matchLine = function (line, opts) {
-    const strict = !!(opts && opts.strict);
+    const strict = !!(opts && opts.strict), relaxed = !!(opts && opts.relaxed);
     const q = key(line);
     if (q.length < 3) return null;
     if (this.exact.has(q)) {
@@ -101,18 +101,18 @@
       const k = this.keys[ki];
       if (k.length > q.length * 1.6 + 4) continue;   // name far longer than what was read
       const share = c / (k.length + 2);               // fraction of the name's trigrams seen
-      if (share >= 0.25) cand.push([ki, share]);
+      if (share >= (relaxed ? 0.15 : 0.25)) cand.push([ki, share]);
     }
     cand.sort((a, b) => b[1] - a[1]);
-    let best = null;
-    for (const [ki] of cand.slice(0, 60)) {
+    let best = null, second = null;
+    for (const [ki] of cand.slice(0, relaxed ? 200 : 60)) {
       const k = this.keys[ki];
       const { d, start, end } = fitDistance(k, q);
       const score = 1 - d / k.length;
       const span = end - start;
       const cover = k.length / q.length;     // how much of the line the name explains
       const short = k.length < 6;
-      if (short ? (d > 0 || cover < 0.6) : (score < 0.78 || cover < 0.45)) continue;
+      if (short ? (d > 0 || cover < 0.6) : (score < (relaxed && k.length >= 7 ? 0.7 : 0.78) || cover < 0.45)) continue;
       // Half of a split card ("Invent", "Rise") only counts when read exactly, never as a near miss.
       if (this.face[ki] && d > 0) continue;
       if (strict && (this.face[ki] || k.length < 7 || score < 0.9 || (k.length - d) / Math.max(q.length, k.length) < 0.7)) continue;
@@ -120,8 +120,12 @@
       // and "Black Widow, Double Agent" beats a partial match.
       const explained = (k.length - d) / Math.max(q.length, k.length);
       const rank = explained + score * 0.5 - (span > k.length * 1.4 ? 0.05 : 0);
-      if (!best || rank > best.rank) best = { name: this.names[this.owner[ki]], score, rank, exact: d === 0 };
+      const name = this.names[this.owner[ki]];
+      if (!best || rank > best.rank) { if (best && best.name !== name) second = best; best = { name, score, rank, exact: d === 0, explained }; }
+      else if (name !== best.name && (!second || rank > second.rank)) second = { name, score, rank };
     }
+    // A forgiving match only counts when it's clearly the best candidate and explains most of the line.
+    if (best && relaxed && best.score < 0.78 && (q.length > key(best.name).length * 1.5 || (second && best.rank - second.rank < 0.1))) return null;
     return best ? { name: best.name, score: best.score, exact: best.exact } : null;
   };
 
@@ -177,11 +181,13 @@
      Each matched line is one card; a card's count is the most times it was seen in any single reading. */
   // Type lines ("Sorcery", "Creature — Human Soldier") sit in bars that look like name bars.
   const TYPE_LINE = /^[^A-Za-z]*(?:(?:[Ll]egendary|[Bb]asic|[Ss]now|[Ww]orld|[Kk]indred|[Tt]ribal)\s+)*(?:[Aa]rtifact|[Ee]nchantment|[Cc]reature|[Ll]and|[Pp]laneswalker|[Ii]nstant|[Ss]orcery|[Bb]attle)(?:\s+(?:[Aa]rtifact|[Cc]reature|[Ll]and))*(?:\s*[—–\-~]|\s*$|\s+[^A-Z])/;
+  // A type line with junk in front of it ("ik Creature — Orc Sorcerer").
+  const TYPE_ANYWHERE = /\b(?:[Cc]reature|[Aa]rtifact|[Ee]nchantment|[Ll]and|[Pp]laneswalker|[Bb]attle)\s*[—–]\s*[A-Z]/;
   const SMALL = /^(a|an|and|at|by|for|from|in|into|of|on|or|over|the|to|upon|with|within|without|under|beyond|through|between|against|among|before|after|vs)$/;
   // Rules and flavor text read like sentences: they start in lowercase, end with a full stop, or have several lowercase words.
-  function looksLikeSentence(line) {
+  function looksLikeSentence(line, loose) {
     const t = line.replace(/^[^A-Za-z]+/, "");
-    if (/^[a-z]/.test(t)) return true;
+    if (!loose && /^[a-z]/.test(t)) return true;
     if (/[a-z]{2,}[.:;]\W*$/.test(t)) return true;
     const low = (t.match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !SMALL.test(w));
     return low.length >= 2;
@@ -194,7 +200,7 @@
     const counts = new Map(), scores = new Map(), unmatched = new Map();
     for (const text of readings) {
       const here = new Map();
-      const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(l => l && !TYPE_LINE.test(l) && !(strict && looksLikeSentence(l)));
+      const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(l => l && !TYPE_LINE.test(l) && !TYPE_ANYWHERE.test(l) && !(strict ? looksLikeSentence(l) : looksLikeSentence(l, true)));
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         let m = matcher.matchLine(line, opts);
@@ -235,7 +241,18 @@
     return { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name) })), leftovers };
   }
 
-  const api = { Matcher, key, fitDistance, countFromReadings };
+  // Would a name-bar line be considered at all? (not a type line, not sentence-like)
+  // Clearly not a name: a type line, or text with several ordinary lowercase words or a full stop (rules/flavor text).
+  function clearlyNotName(l) {
+    if (!l) return false;
+    if (TYPE_LINE.test(l) || TYPE_ANYWHERE.test(l)) return true;
+    const t = l.replace(/^[^A-Za-z]+/, "");
+    if (/[a-z]{3,}[.:;]/.test(t)) return true;
+    return (t.match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !SMALL.test(w)).length >= 3;
+  }
+  function usableBarLine(l) { return !!l && !TYPE_LINE.test(l) && !TYPE_ANYWHERE.test(l) && !looksLikeSentence(l, true); }
+
+  const api = { Matcher, key, fitDistance, countFromReadings, usableBarLine, clearlyNotName };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CardMatcher = api;
 })(typeof self !== "undefined" ? self : this);

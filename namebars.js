@@ -47,36 +47,45 @@
     return out;
   }
 
-  /* Light text on a dark bar (some special frames). The dark bar often runs straight into dark artwork,
-     so look row by row: a bar is a band of rows that are dark almost all the way across, with some light letters in it. */
-  function darkBars(g, w, h, rClose, minW) {
-    let m = new Uint8Array(g.length); for (let i = 0; i < g.length; i++) m[i] = g[i] < 90 ? 1 : 0;
-    m = horiz(horiz(m, w, h, rClose, dilate1), w, h, rClose, erode1);   // bridge the light letters
-    const runs = [];
-    for (let y = 0; y < h; y++) {
-      let best = [0, 0], s = -1;
-      for (let x = 0; x <= w; x++) { const on = x < w && m[y * w + x]; if (on && s < 0) s = x; if (!on && s >= 0) { if (x - s > best[1] - best[0]) best = [s, x]; s = -1; } }
-      runs.push(best[1] - best[0] >= minW ? best : null);
-    }
+  /* Light text on a dark bar (some special frames). The dark bar often runs into dark artwork below it, and in a
+     grid into the neighbouring cards, so look inside each column of cards (known from the light bars found):
+     a dark bar is a band of rows that are dark almost all the way across the column, with some light letters in it. */
+  function darkBars(g, w, h, cols, barH) {
     const out = [];
-    for (let y = 0; y < h; y++) {
-      if (!runs[y]) continue;
-      let [x0, x1] = runs[y], y1 = y + 1;
-      // Follow rows whose dark run lines up with the row above.
-      while (y1 < h && runs[y1]) {
-        const p = runs[y1 - 1], r = runs[y1];
-        if (Math.min(p[1], r[1]) - Math.max(p[0], r[0]) < 0.6 * Math.min(p[1] - p[0], r[1] - r[0])) break;
-        x0 = Math.min(x0, r[0]); x1 = Math.max(x1, r[1]); y1++;
+    for (const [cx0, cx1] of cols) {
+      const cw = cx1 - cx0; if (cw < 10) continue;
+      const dark = new Uint8Array(h);
+      for (let y = 0; y < h; y++) { let d = 0; for (let x = cx0; x < cx1; x++) if (g[y * w + x] < 90) d++; dark[y] = d >= cw * 0.8 ? 1 : 0; }
+      for (let y = 0; y < h; y++) {
+        if (!dark[y]) continue;
+        let y1 = y + 1, gap = 0;
+        while (y1 < h && (dark[y1] || (gap < 1 && y1 + 1 < h && dark[y1 + 1]))) { gap = dark[y1] ? 0 : gap + 1; y1++; }
+        const end = y1;
+        // The name sits at the top of a dark area that continues into artwork, so keep just the top strip.
+        if (y1 - y > h * 0.09) y1 = y + Math.round(barH);
+        const bh = y1 - y;
+        if (bh >= h * 0.012 && bh <= h * 0.09 && cw / bh >= 5) {
+          let light = 0; for (let yy = y; yy < y1; yy++) for (let x = cx0; x < cx1; x++) if (g[yy * w + x] > 150) light++;
+          const f = light / (bh * cw);
+          // Rows through the tops of the letters are less dark, so the band starts a little low: extend it upwards.
+          if (f >= 0.02 && f <= 0.45) out.push({ x0: cx0, y0: Math.max(0, y - Math.round(bh * 0.5)), x1: cx1, y1: Math.min(h, y1 + Math.round(bh * 0.15)), a: bh * cw, dark: true });
+        }
+        y = end - 1;
       }
-      const bh = y1 - y;
-      if (bh >= h * 0.012 && bh <= h * 0.09 && (x1 - x0) / bh >= 5) {
-        let light = 0; for (let yy = y; yy < y1; yy++) for (let x = x0; x < x1; x++) if (g[yy * w + x] > 150) light++;
-        const f = light / (bh * (x1 - x0));
-        if (f >= 0.03 && f <= 0.45) out.push({ x0, y0: y, x1, y1, a: bh * (x1 - x0) });
-      }
-      y = y1 - 1;
     }
     return out;
+  }
+
+  // Columns of cards: x-ranges shared by the light bars found (one column for a stack, three for a 3x3 grid).
+  function columnsOf(bars) {
+    const cols = [];
+    for (const b of bars.slice().sort((p, q) => p.x0 - q.x0)) {
+      const c = cols.find(c => Math.min(c.x1, b.x1) - Math.max(c.x0, b.x0) > 0.5 * Math.min(c.x1 - c.x0, b.x1 - b.x0));
+      if (c) { c.xs0.push(b.x0); c.xs1.push(b.x1); c.x0 = Math.min(c.x0, b.x0); c.x1 = Math.max(c.x1, b.x1); }
+      else cols.push({ x0: b.x0, x1: b.x1, xs0: [b.x0], xs1: [b.x1] });
+    }
+    const med = a => a.slice().sort((p, q) => p - q)[a.length >> 1];
+    return cols.map(c => [med(c.xs0), med(c.xs1)]);
   }
 
   /* grey: Uint8Array of w*h brightness values (photo scaled so its long side is ~1000 px).
@@ -87,7 +96,7 @@
     const pct = q => { let c = 0; const t = grey.length * q; for (let v = 0; v < 256; v++) { c += hist[v]; if (c >= t) return v; } return 255; };
     const lo = pct(0.02), hi = pct(0.98), span = Math.max(1, hi - lo);
     const g = new Uint8Array(grey.length); for (let i = 0; i < grey.length; i++) g[i] = Math.max(0, Math.min(255, ((grey[i] - lo) * 255 / span) | 0));
-    const rClose = Math.max(1, Math.round(w / 120)), rOpenX = Math.max(1, Math.round(w / 80)), rOpenY = 2;
+    const rClose = Math.max(1, Math.round(w / 200)), rOpenX = Math.max(1, Math.round(w / 80)), rOpenY = 2;
     // Each card's local surroundings, for spotting strips that are lighter than what's around them
     // (gold bars inside a gold frame) rather than light overall.
     const local = boxBlur(g, w, h, Math.max(3, Math.round(w / 12)), Math.max(3, Math.round(h / 25)));
@@ -102,13 +111,13 @@
       m = vert(horiz(m, w, h, rOpenX, dilate1), w, h, rOpenY, dilate1);                 // …and grow the rest back
       for (const c of components(m, w, h)) {
         const bw = c.x1 - c.x0, bh = c.y1 - c.y0;
-        if (bw < w * 0.3 || bh < h * 0.012 || bh > h * 0.09 || bw / bh < 5 || c.a / (bw * bh) < 0.5) continue;
+        if (bw < w * 0.2 || bh < h * 0.012 || bh > h * 0.09 || bw / bh < 5 || c.a / (bw * bh) < 0.5) continue;
         found[kind].push(c);
       }
     }
     // The same bar is found at several cut-offs: merge boxes of the same kind that overlap or touch.
     const mergeAll = raw => {
-      const merged = raw.slice().sort((a, b) => a.y0 - b.y0).map(b => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }));
+      const merged = raw.slice().sort((a, b) => a.y0 - b.y0).map(b => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, dark: !!b.dark }));
       let changed = true;
       while (changed) {
         changed = false;
@@ -129,7 +138,10 @@
     // Judge dark bars against the width of the light bars found (cards can be small in the photo).
     const widths = merged.map(b => b.x1 - b.x0).sort((a, b) => a - b);
     const typical = widths.length ? widths[widths.length >> 1] : w * 0.5;
-    found.dark = darkBars(g, w, h, rClose, Math.max(w * 0.15, typical * 0.6));
+    const heights = merged.map(b => b.y1 - b.y0).sort((a, b) => a - b);
+    const typicalH = heights.length ? heights[heights.length >> 1] * 1.3 : h * 0.03;
+    const usable = merged.filter(b => (b.x1 - b.x0) >= typical * 0.6 && (b.x1 - b.x0) <= typical * 1.5);
+    found.dark = darkBars(g, w, h, columnsOf(usable), typicalH);
     for (const kind of ["local", "dark"]) for (const b of mergeAll(found[kind])) if (!merged.some(m => overlaps(m, b))) merged.push(b);
     // Drop strips that can't be a name bar: touching the edge of the photo (table, background), or far wider or
     // narrower than the typical bar in this photo.
