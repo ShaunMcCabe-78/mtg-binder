@@ -138,6 +138,16 @@ nav.tabs button{flex-direction:column;gap:2px;border:0;background:transparent;co
 nav.tabs button svg{width:24px;height:24px}
 nav.tabs button[aria-selected="true"]{color:var(--accent)}
 nav.tabs button[aria-selected="true"] .lbl{font-weight:700}
+.selbar{position:sticky;bottom:calc(72px + env(safe-area-inset-bottom,0px));z-index:9;margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:10px}
+#selYes{background:var(--bad);border-color:var(--bad);color:#fff}
+.selbar .selrow{justify-content:space-between;flex-wrap:nowrap}
+.selbar #selCount{flex:1}
+#collBody.selecting .crow{cursor:pointer}
+.crow.picked{background:var(--accent-soft)}
+.tick{display:inline-grid;place-items:center;width:20px;height:20px;margin-right:10px;border:2px solid var(--muted);border-radius:5px;font-size:.8rem;vertical-align:-4px;color:var(--accent-ink)}
+.crow.picked .tick{background:var(--accent);border-color:var(--accent)}
+body:has(#selBar:not([hidden])) .toast{bottom:auto;top:calc(12px + env(safe-area-inset-top,0px))}
+.toastbtn{margin-left:10px;background:none;border:0;color:var(--accent-soft);font-weight:700;text-decoration:underline;padding:0;cursor:pointer}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:500;z-index:30;max-width:calc(100% - 32px)}
 .banner{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:10px 12px;margin-top:12px}
 /* card sheet */
@@ -296,10 +306,14 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
           <option value="added">Recently added</option>
           <option value="value">Sort by value</option>
         </select>
-        <button class="ghost small" id="btnCopyColl">Copy list</button>
+        <div class="row" style="gap:6px"><button class="ghost small" id="btnCopyColl">Copy list</button><button class="small" id="btnSelect">Select</button></div>
       </div>
     </div>
     <div id="collBody"></div>
+    <div class="selbar" id="selBar" hidden>
+      <div class="panel" id="selConfirm" hidden><p id="selMsg"></p><div class="row"><button class="primary" id="selYes">Delete</button><button id="selNo">Keep</button></div></div>
+      <div class="row selrow"><span id="selCount" class="small">0 selected</span><button class="ghost small" id="btnSelAll">Select all</button><button class="danger" id="btnSelDel" disabled>Delete</button></div>
+    </div>
   </section>
 
   <!-- DECK -->

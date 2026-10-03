@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.8.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -243,7 +243,12 @@ function colorBucket(name) {
 }
 function mainType(t) { return DeckBuilder.mainType(t); }
 function totals(scope) { let n = 0, u = 0; for (const c of Object.values(merged(scope || "all"))) { n += c.qty; u++; } return { n, u }; }
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2600); }
+// action: optional { label, run } shown as a button (e.g. Undo); the toast then stays a little longer.
+function toast(msg, action) {
+  const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t);
+  if (action) { const b = document.createElement("button"); b.className = "toastbtn"; b.textContent = action.label; b.onclick = () => { t.hidden = true; action.run(); }; t.append(" ", b); }
+  toast._t = setTimeout(() => t.hidden = true, action ? 7000 : 2600);
+}
 async function copyText(txt) {
   try { await navigator.clipboard.writeText(txt); toast("Copied"); }
   catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); toast("Copied"); } catch (_) { toast("Select and copy the text manually"); } ta.remove(); }
@@ -255,6 +260,7 @@ function showTab(name) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   ["scan", "coll", "deck", "set"].forEach(n => $("#pane-" + n).hidden = n !== name);
   renderColSelects();
+  if (name !== "coll") S.sel = null;
   if (name === "coll") renderColl();
   if (name === "deck") renderEngine();
   if (name === "set") renderSettings();
@@ -563,17 +569,56 @@ function renderColl() {
   const val1 = c => entryValue(c).v;
   rows.sort((a, b) => sort === "value" ? (val1(b[1]) - val1(a[1])) || a[0].localeCompare(b[0]) : sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
   const single = view !== "all";
-  body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); return `
-    <div class="crow">
-      <button class="nm" data-open="${esc(k)}">${esc(c.name)}</button>
+  const sel = S.sel;
+  if (sel) { const have = new Set(all.map(([k]) => k)); for (const k of [...sel]) if (!have.has(k)) sel.delete(k); }
+  S.shown = rows.map(([k]) => k);
+  body.classList.toggle("selecting", !!sel);
+  body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); const on = sel && sel.has(k); return `
+    <div class="crow${on ? " picked" : ""}">
+      <button class="nm" data-open="${esc(k)}"${sel ? ` aria-pressed="${on}"` : ""}>${sel ? `<span class="tick" aria-hidden="true">${on ? "✓" : ""}</span>` : ""}${esc(c.name)}</button>
       <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(entryValue(c))}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
-      ${single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
+      ${sel ? `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>` : single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
         : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
     </div>`; }).join("")}</div>` : `<p class="muted">No cards match.</p>`;
+  renderSelBar();
 }
+/* ---------- selecting cards to delete ---------- */
+function renderSelBar() {
+  const sel = S.sel, bar = $("#selBar");
+  $("#btnSelect").textContent = sel ? "Done" : "Select";
+  bar.hidden = !sel; $("#selConfirm").hidden = true;
+  if (!sel) return;
+  const n = sel.size; $("#selCount").textContent = `${n} selected`;
+  $("#btnSelDel").disabled = !n;
+  const allOn = S.shown.length && S.shown.every(k => sel.has(k));
+  $("#btnSelAll").textContent = allOn ? "Select none" : "Select all";
+}
+$("#btnSelect").onclick = () => { S.sel = S.sel ? null : new Set(); renderColl(); };
+$("#btnSelAll").onclick = () => {
+  const allOn = S.shown.every(k => S.sel.has(k));
+  for (const k of S.shown) allOn ? S.sel.delete(k) : S.sel.add(k);
+  renderColl();
+};
+$("#btnSelDel").onclick = () => {
+  const view = S.view, m = merged(view); let copies = 0; for (const k of S.sel) copies += (m[k] || {}).qty || 0;
+  const n = S.sel.size;
+  $("#selMsg").textContent = `Delete ${n === 1 ? (m[[...S.sel][0]] || {}).name || "1 card" : n + " cards"} (${copies} cop${copies === 1 ? "y" : "ies"}) from ${view === "all" ? (S.order.length > 1 ? "every collection" : colName(S.order[0])) : colName(view)}?`;
+  $("#selConfirm").hidden = false;
+};
+$("#selNo").onclick = () => { $("#selConfirm").hidden = true; };
+$("#selYes").onclick = () => {
+  const before = JSON.stringify(S.cols), ids = S.view === "all" ? S.order : [S.view];
+  let copies = 0; for (const id of ids) for (const k of S.sel) { const c = S.cols[id].cards[k]; if (c) { copies += c.qty; delete S.cols[id].cards[k]; } }
+  const n = S.sel.size; S.sel = new Set();
+  persist(); renderHeader(); renderColl();
+  toast(`Deleted ${n} card${n === 1 ? "" : "s"} (${copies} cop${copies === 1 ? "y" : "ies"})`, { label: "Undo", run: () => { S.cols = JSON.parse(before); persist(); renderHeader(); renderColl(); toast("Restored"); } });
+};
 $("#collBody").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.open) { openCard(b.dataset.open); return; }
+  if (b.dataset.open) {
+    if (S.sel) { const k = b.dataset.open; S.sel.has(k) ? S.sel.delete(k) : S.sel.add(k); renderColl(); return; }
+    openCard(b.dataset.open); return;
+  }
   const k = b.dataset.cinc ?? b.dataset.cdec; const col = S.cols[S.view]; if (k == null || !col || !col.cards[k]) return;
   if (b.dataset.cinc != null) col.cards[k].qty++; else { col.cards[k].qty--; if (col.cards[k].qty <= 0) delete col.cards[k]; else tidySets(col.cards[k]); }
   persist(); renderHeader(); renderColl();
@@ -594,7 +639,7 @@ function collText(scope, withSets) {
 $("#btnCopyColl").onclick = () => copyText(collText(S.view));
 
 /* ---------- managing collections ---------- */
-$("#viewSel").onchange = e => { S.view = e.target.value; persist(); $("#delColConfirm").hidden = true; renderColl(); };
+$("#viewSel").onchange = e => { S.view = e.target.value; if (S.sel) S.sel = new Set(); persist(); $("#delColConfirm").hidden = true; renderColl(); };
 $("#btnManageCol").onclick = () => { $("#manageBox").hidden = !$("#manageBox").hidden; renderManage(); };
 function renderManage() {
   const single = S.view !== "all";
