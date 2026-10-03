@@ -57,6 +57,17 @@
   }
 
   // Rebuild lines from word positions so names split into pieces are joined back up.
+  // regroupLines gives each line with its vertical position (yc, in the read image's pixels).
+  function regroupLines(data) {
+    const ws = ((data && data.words) || []).filter(w => w && w.text && w.text.trim() && w.bbox).map(w => ({ t: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, yc: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }));
+    if (!ws.length) return [];
+    const hs = ws.map(w => w.h).sort((a, b) => a - b), mh = hs[hs.length >> 1] || 10;
+    ws.sort((a, b) => a.yc - b.yc); const lines = [];
+    for (const w of ws) { const L = lines.find(L => Math.abs(L.yc - w.yc) < mh * 0.6);
+      if (L) { L.w.push(w); L.yc = L.w.reduce((a, v) => a + v.yc, 0) / L.w.length; } else lines.push({ yc: w.yc, w: [w] }); }
+    return lines.sort((a, b) => a.yc - b.yc).map(L => { const ww = L.w.sort((a, b) => a.x0 - b.x0); let s = ww[0].t;
+      for (let i = 1; i < ww.length; i++) s += (ww[i].x0 - ww[i - 1].x1 < mh * 0.25 ? "" : " ") + ww[i].t; return { text: s, yc: L.yc }; });
+  }
   function regroupWords(data) {
     const ws = ((data && data.words) || []).filter(w => w && w.text && w.text.trim() && w.bbox).map(w => ({ t: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, yc: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }));
     if (!ws.length) return "";
@@ -143,7 +154,7 @@
 
   // Read the whole photo (backup for cards whose bar wasn't found). Returns text readings.
   async function readWholePhoto(ctx, src, variants) {
-    const readings = [];
+    const readings = []; let lines = [];
     const vars = variants === 2 ? [prepCanvas(src, 3000, true), prepCanvas(src, 2200, false)] : [prepCanvas(src, 3000, true)];
     if (ctx.psm !== 11) { await ctx.worker.setParameters({ tessedit_pageseg_mode: "11" }); ctx.psm = 11; }
     for (let v = 0; v < vars.length; v++) {
@@ -151,8 +162,14 @@
       ctx.progress((v) / vars.length);
       const { data } = await ctx.worker.recognize(vars[v], { rotateAuto: true }, { text: true, blocks: true });
       readings.push(cleanOcr(data && data.text));
-      if (v === 0) readings.push(regroupWords(data));
+      if (v === 0) {
+        readings.push(regroupWords(data));
+        // Where each line sits in the photo (for putting cards in order).
+        const [W, H] = dimsOf(src), sc = vars[0].height / H;
+        lines = regroupLines(data).map(l => ({ text: l.text, y: l.yc / sc }));
+      }
     }
+    readings.lines = lines;
     return readings;
   }
 

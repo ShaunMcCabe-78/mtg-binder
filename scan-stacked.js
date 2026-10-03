@@ -46,6 +46,13 @@
     for (const c of w.cards) { const f = res.cards.find(x => x.name === c.name); if (f) f.qty = Math.max(f.qty, c.qty); else res.cards.push(c); }
     if (!bars.length) res.leftovers.push(...w.leftovers);
     if (looksLikeGrid) res.hint = "grid";
+
+    // Keep the cards in the order they're stacked (top to bottom). A duplicate goes where its first copy is.
+    const pos = new Map();
+    const place = (name, y) => { if (!pos.has(name) || y < pos.get(name)) pos.set(name, y); };
+    bars.forEach((bar, n) => { for (const line of [a[n], b[n]]) { const m = core.barMatch(ctx.matcher, line); if (m) { place(m.name, bar.y0); break; } } });
+    for (const l of whole.lines || []) { const m = ctx.matcher.matchLine(l.text, { strict: bars.length > 0 }); if (m && !pos.has(m.name)) place(m.name, l.y); }
+    res.cards.sort((p, q) => (pos.has(p.name) ? pos.get(p.name) : Infinity) - (pos.has(q.name) ? pos.get(q.name) : Infinity));
     return res;
   }
 

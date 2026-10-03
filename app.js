@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "1.6.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -132,12 +132,13 @@ function renderHeader() { const t = totals(); $("#hdrCount").textContent = `${t.
 function addToCollection(items, colId) {
   const now = Date.now();
   const byCol = {};
-  for (const c of items) {
+  for (const [i, c] of items.entries()) {
     const name = String(c.name || "").trim(); if (!name) continue;
+    const at = now - i;   // keeps the scanned order in "Recently added"
     const id = S.cols[c.col] ? c.col : S.cols[colId] ? colId : S.target;
     const cards = S.cols[id].cards; const k = keyOf(name);
-    if (cards[k]) { cards[k].qty += c.qty; cards[k].added = now; }
-    else cards[k] = { name, qty: c.qty, added: now };
+    if (cards[k]) { cards[k].qty += c.qty; cards[k].added = at; }
+    else cards[k] = { name, qty: c.qty, added: at };
     byCol[id] = (byCol[id] || 0) + c.qty;
   }
   persist(); renderHeader(); renderColSelects();
