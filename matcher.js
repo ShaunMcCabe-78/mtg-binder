@@ -9,7 +9,9 @@
     return String(s || "")
       .normalize("NFKD").replace(/[̀-ͯ]/g, "")
       .toLowerCase()
-      .replace(/[|!]/g, "l")          // OCR often reads l as | or !
+      // Letters the reader often mixes up count as the same: I, l, 1, | and ! ("S.H.1E.L.D."), and O and 0.
+      .replace(/[|!1l]/g, "i")
+      .replace(/0/g, "o")
       .replace(/[^a-z0-9]+/g, "");
   }
 
@@ -102,8 +104,10 @@
       const cover = k.length / q.length;     // how much of the line the name explains
       const short = k.length < 6;
       if (short ? (d > 0 || cover < 0.6) : (score < 0.78 || cover < 0.45)) continue;
-      // Prefer higher score, then longer names (e.g. "Black Widow, Double Agent" over a shorter partial)
-      const rank = score + Math.min(k.length, 40) / 400 - (span > k.length * 1.4 ? 0.05 : 0);
+      // Prefer the name that explains most of the line, so "S.H.I.E.L.D. Spy Kit" beats the shorter card "Spy Kit"
+      // and "Black Widow, Double Agent" beats a partial match.
+      const explained = (k.length - d) / Math.max(q.length, k.length);
+      const rank = explained + score * 0.5 - (span > k.length * 1.4 ? 0.05 : 0);
       if (!best || rank > best.rank) best = { name: this.names[this.owner[ki]], score, rank, exact: d === 0 };
     }
     return best ? { name: best.name, score: best.score, exact: best.exact } : null;
