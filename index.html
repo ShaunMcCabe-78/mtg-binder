@@ -141,9 +141,10 @@ nav.tabs button[aria-selected="true"] .lbl{font-weight:700}
 /* card sheet */
 .sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:var(--bg);width:100%;max-width:720px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px 16px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px}
+.sheet>*{flex-shrink:0}   /* don't squash the card picture to fit the screen; the sheet scrolls instead */
 .sheet .grab{width:40px;height:4px;border-radius:2px;background:var(--line);align-self:center}
-.cardimg{width:100%;max-width:300px;align-self:center;aspect-ratio:488/680;border-radius:4.75%/3.5%;background:var(--sunk);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.9rem;overflow:hidden}
-.cardimg img{width:100%;height:100%;object-fit:cover;display:block}
+.cardimg{width:100%;max-width:min(320px,70vw);align-self:center;aspect-ratio:488/680;flex:none;border-radius:4.75%/3.5%;background:var(--sunk);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.9rem;overflow:hidden}
+.cardimg img{width:100%;height:100%;object-fit:contain;display:block}
 .oracle{white-space:pre-wrap;font-size:.95rem}
 details>summary{cursor:pointer;font-weight:700}
 input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;padding:6px 10px}
