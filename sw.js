@@ -1,6 +1,6 @@
 /* Offline support: keeps the app, card list and text reader on the phone.
    App files are re-downloaded on each version; the big data files live in their own cache and are kept across updates. */
-const VERSION = "binder-v1.9.0";
+const VERSION = "binder-v1.9.1";
 const DATA_CACHE = "binder-data-1";   // bump only when cards.json or the reader data changes
 const APP = ["./", "index.html", "app.js", "matcher.js", "namebars.js", "scan-core.js", "scan-stacked.js", "scan-grid.js", "scan-set.js", "builder.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
@@ -20,7 +20,7 @@ self.addEventListener("install", e => {
 self.addEventListener("message", e => { if (e.data === "skipWaiting") self.skipWaiting(); });
 self.addEventListener("activate", e => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if ((k.startsWith("binder-v") && k !== VERSION) || (k.startsWith("binder-data") && k !== DATA_CACHE)) await caches.delete(k);
+    for (const k of await caches.keys()) if ((k.startsWith("binder-v") && k !== VERSION) || (k.startsWith("binder-data") && k !== DATA_CACHE) || k === "mtg-cdn") await caches.delete(k);
     await self.clients.claim();
   })());
 });
@@ -28,9 +28,10 @@ self.addEventListener("activate", e => {
 async function cacheFirst(req, name) {
   const c = await caches.open(name);
   const hit = await c.match(req);
-  if (hit) return hit;
+  // A copy saved without CORS can't be checked against its fingerprint, so don't hand it to a request that needs one.
+  if (hit && !(hit.type === "opaque" && req.mode === "cors")) return hit;
   const res = await fetch(req);
-  if (res.ok || res.type === "opaque") c.put(req, res.clone());
+  if (res.ok || (res.type === "opaque" && req.mode !== "cors")) c.put(req, res.clone());
   return res;
 }
 
@@ -41,7 +42,7 @@ self.addEventListener("fetch", e => {
   if (url.hostname === "api.anthropic.com") return;
   if (url.hostname === "api.scryfall.com" && !url.searchParams.has("format")) return;
   if (url.hostname === "cdn.jsdelivr.net" || url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
-    e.respondWith(cacheFirst(req, "mtg-cdn")); return;
+    e.respondWith(cacheFirst(req, "mtg-cdn-2")); return;
   }
   if (url.hostname === "api.scryfall.com" || url.hostname.endsWith("scryfall.io")) {
     e.respondWith(cacheFirst(req, "mtg-img")); return;

@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.9.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -16,8 +16,17 @@ const TESS = {
   lib: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js",
   worker: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
   core: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/",
-  coreFiles: ["tesseract-core-simd-lstm.wasm.js", "tesseract-core-lstm.wasm.js"]
+  coreFiles: ["tesseract-core-simd-lstm.wasm.js", "tesseract-core-lstm.wasm.js"],
+  // Fingerprints (SHA-256) of the exact published files. The browser refuses a file that doesn't match,
+  // so a tampered copy on the CDN can't run here. (From jsDelivr's file list; the core files also checked against the project's source.)
+  sri: {
+    "/dist/tesseract.min.js": "sha256-qOKZGNCYsrBuEBK9rv+0rsBEXF1WVHCQI+C9H0QqgOg=",
+    "/dist/worker.min.js": "sha256-rKEiljn8mQfYb5boJZVaK3xXFtF/O8Os1x+cerZhgfw=",
+    "/tesseract-core-simd-lstm.wasm.js": "sha256-ziDtqVM8vtHmwrQnb7rh4K3GG2dUtVEwhL5gF4e0V88=",
+    "/tesseract-core-lstm.wasm.js": "sha256-jwSqDMgee94z+A6S+gGnpmXwtIhNCYrPXenHEEoR36o="
+  }
 };
+const sriFor = url => { for (const [end, h] of Object.entries(TESS.sri)) if (url.endsWith(end)) return h; return undefined; };
 const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
 
 /* ---------- state + storage ---------- */
@@ -365,9 +374,9 @@ $("#btnClearPhotos").onclick = () => { S.photos.forEach(p => URL.revokeObjectURL
 
 /* ---------- SCAN: text reader (Tesseract) ---------- */
 let ocrWorkerP = null, ocrStop = false, ocrPct = null;
-function loadScript(src) { return new Promise((res, rej) => { if (window.Tesseract) return res(); const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("Could not load the text reader")); document.head.appendChild(s); }); }
+function loadScript(src) { return new Promise((res, rej) => { if (window.Tesseract) return res(); const s = document.createElement("script"); s.crossOrigin = "anonymous"; const h = sriFor(src); if (h) s.integrity = h; s.src = src; s.onload = res; s.onerror = () => rej(new Error("Could not load the text reader")); document.head.appendChild(s); }); }
 async function blobUrlFor(url, suffix) {
-  const r = await fetch(url); if (!r.ok) throw new Error("Download failed (" + r.status + ")");
+  const r = await fetch(url, { integrity: sriFor(url) }); if (!r.ok) throw new Error("Download failed (" + r.status + ")");
   return URL.createObjectURL(new Blob([await r.text()], { type: "application/javascript" })) + (suffix || "");
 }
 async function makeWorker(coreFile) {
@@ -1122,7 +1131,7 @@ $("#noReset").onclick = () => $("#resetConfirm").hidden = true;
 $("#yesReset").onclick = () => { ["mtg.cards", "mtg.cols", "mtg.target", "mtg.view", "mtg.buildFrom", "mtg.decks", "mtg.apiKey", "mtg.engine"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cols = { main: { name: "My collection", created: Date.now(), cards: {} } }; S.order = ["main"]; S.target = "main"; S.view = "all"; S.buildFrom = "all"; renderColSelects(); S.decks = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
 async function checkOffline() {
   try {
-    const c = await caches.open("mtg-cdn"); const hits = await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0]].map(u => c.match(u)));
+    const c = await caches.open("mtg-cdn-2"); const hits = await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0]].map(u => c.match(u)));
     const ready = hits.every(Boolean);
     $("#offlineStatus").textContent = ready ? "The scanner is saved on this phone and works without internet." : "The scanner downloads the first time you scan (about 5 MB). Download it now if you'll be offline later.";
     $("#btnPrefetch").hidden = ready;
@@ -1130,7 +1139,7 @@ async function checkOffline() {
 }
 $("#btnPrefetch").onclick = async () => {
   const b = $("#btnPrefetch"); b.disabled = true; b.textContent = "Downloading…";
-  try { await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0], TESS.core + TESS.coreFiles[1]].map(u => fetch(u))); await getOcr(); toast("Scanner ready for offline use"); }
+  try { await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0], TESS.core + TESS.coreFiles[1]].map(u => fetch(u, { integrity: sriFor(u) }))); await getOcr(); toast("Scanner ready for offline use"); }
   catch (e) { toast("Download failed. Check your connection."); }
   finally { b.disabled = false; b.textContent = "Download scanner for offline use"; checkOffline(); }
 };

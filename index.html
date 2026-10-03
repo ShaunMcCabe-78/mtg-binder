@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Security rules: code only from this site and the pinned text reader on jsDelivr; data only sent to Scryfall and Anthropic. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net blob: 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://api.scryfall.com https://api.anthropic.com https://cdn.jsdelivr.net blob: data:; img-src 'self' data: blob: https://api.scryfall.com https://*.scryfall.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Magic Binder</title>
 <meta name="description" content="Scan your Magic: The Gathering cards, keep your collection on your phone, and build decks from what you own.">

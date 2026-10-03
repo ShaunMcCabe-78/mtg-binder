@@ -39,6 +39,11 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `eng.traineddata.gz` | English text-reading model for Tesseract |
 | `sw.js`, `manifest.webmanifest` | Offline support and Home Screen install |
 
+## Security
+- The text reader is loaded from jsDelivr at a pinned version, with SHA-256 fingerprints (subresource integrity): a changed file is refused.
+- A Content Security Policy only allows code from this site and that pinned reader, and only sends data to Scryfall and Anthropic.
+- The Anthropic API key is stored only on the phone. Use a key just for this app with a monthly spending limit.
+
 Magic: The Gathering is © Wizards of the Coast. This is an unofficial fan project.
 
 ## Planned
