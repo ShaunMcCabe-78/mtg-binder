@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.10.1";
+const APP_VERSION = "1.10.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -1104,14 +1104,74 @@ function renderSettings() {
   $("#keyStatus").className = "small " + (k ? "okmsg" : "muted");
   renderDbInfo();
   $("#appVersion").textContent = "Version " + APP_VERSION;
-  renderPriceInfo();
+  renderPriceInfo(); renderStorage();
   checkOffline();
   if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(p => { $("#persistStatus").textContent = p ? "This phone has agreed to keep the app's data." : "Tip: opening the app from your Home Screen regularly keeps iOS from clearing its data."; });
 }
+/* ---------- data freshness ---------- */
+// When the card data that ships with the app was built (update when cards.json / prints.json are rebuilt).
+const DATA_BUILT = { cards: "2026-10-02", prints: "2026-10-03" };
+(() => { const seen = lsGet("mtg.versionSeen", null); if (!seen || seen.v !== APP_VERSION) lsSet("mtg.versionSeen", { v: APP_VERSION, at: Date.now() }); })();
+const dateText = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const ago = t => { const d = Math.floor((Date.now() - t) / DAY); return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 60 ? `${d} days ago` : `${Math.round(d / 30)} months ago`; };
+const freshness = (t, staleDays) => t ? `${dateText(t)} <span class="${Date.now() - t > staleDays * DAY ? "stale" : "fresh"}">(${ago(t)})</span>` : '<span class="stale">never</span>';
 function renderDbInfo() {
-  const meta = lsGet("mtg.namesChecked", null);
-  $("#dbInfo").innerHTML = `<dt>Cards</dt><dd>${(DB.size + extraNames.filter(n => !DB.has(n)).length).toLocaleString()}</dd><dt>Added from Scryfall</dt><dd>${extraNames.filter(n => !DB.has(n)).length.toLocaleString()} new names</dd><dt>Last checked</dt><dd>${meta ? new Date(meta).toLocaleDateString() : "never"}</dd>`;
+  const meta = lsGet("mtg.namesChecked", null), seen = lsGet("mtg.versionSeen", null);
+  const extra = extraNames.filter(n => !DB.has(n)).length;
+  const newest = PRINTS ? Object.entries(PRINTS.s).filter(([, v]) => v[1] && v[1] <= new Date().toISOString().slice(0, 10)).sort((p, q) => q[1][1].localeCompare(p[1][1]))[0] : null;
+  const extraPrintCount = Object.values(extraPrints).reduce((a, l) => a + l.length, 0);
+  $("#dbInfo").innerHTML =
+    `<dt>App version</dt><dd>${esc(APP_VERSION)}${seen ? ` · on this phone since ${dateText(seen.at)}` : ""}</dd>` +
+    `<dt>Card list</dt><dd>${(DB.size + extra).toLocaleString()} cards · built ${freshness(Date.parse(DATA_BUILT.cards), 120)}</dd>` +
+    `<dt>Set list</dt><dd>${PRINTS ? `${Object.keys(PRINTS.s).length} sets · built ${freshness(Date.parse(DATA_BUILT.prints), 120)}` : "loads on first use"}${newest ? `<br><span class="small muted">Newest: ${esc(newest[1][0])} (${esc(newest[0])}, ${dateText(Date.parse(newest[1][1]))})</span>` : ""}${extraPrintCount ? `<br><span class="small muted">+ ${extraPrintCount} newer printings from Scryfall</span>` : ""}</dd>` +
+    `<dt>New cards check</dt><dd>${freshness(meta, 30)}${extra ? ` · ${extra.toLocaleString()} names added` : ""}</dd>` +
+    `<dt>Prices</dt><dd>${freshness(PRICES.at || null, 2)}</dd>`;
+  if (!PRINTS) loadPrints().then(p => { if (p && !$("#pane-set").hidden) renderDbInfo(); });
 }
+
+/* ---------- storage used ---------- */
+const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : n >= 1e3 ? Math.round(n / 1e3) + " KB" : n + " B";
+async function cacheUsage(match) {
+  let bytes = 0, items = 0, opaque = 0;
+  try {
+    for (const name of await caches.keys()) {
+      if (!match(name)) continue;
+      const c = await caches.open(name);
+      for (const req of await c.keys()) {
+        items++;
+        const r = await c.match(req); if (!r) continue;
+        if (r.type === "opaque") { opaque++; continue; }   // pictures: the browser doesn't reveal their size
+        const len = +r.headers.get("content-length");
+        bytes += len > 0 ? len : (await r.clone().blob()).size;
+      }
+    }
+  } catch (e) {}
+  return { bytes, items, opaque };
+}
+async function renderStorage() {
+  const el = $("#storageInfo"); if (!el) return;
+  let local = 0;
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("mtg.")) local += (k.length + (localStorage.getItem(k) || "").length) * 2; } } catch (e) {}
+  const [app, data, reader, pics] = await Promise.all([
+    cacheUsage(n => n.startsWith("binder-v")), cacheUsage(n => n.startsWith("binder-data")),
+    cacheUsage(n => n.startsWith("mtg-cdn")), cacheUsage(n => n === "mtg-img")]);
+  const picBytes = pics.bytes + pics.opaque * 75e3;   // a card picture is about 75 KB
+  const parts = [
+    ["Your cards, decks, prices & settings", local, "var(--accent)"],
+    ["Card list & set list", data.bytes, "#4a8f6a"],
+    ["Text reader (scanner)", reader.bytes, "#5b7fb0"],
+    ["App files", app.bytes, "#8a7fa8"],
+    [`Card pictures (${pics.items})${pics.opaque ? " · estimate" : ""}`, picBytes, "#b07a5b"]
+  ];
+  const total = parts.reduce((a, p) => a + p[1], 0);
+  el.innerHTML = parts.map(([l, b, c]) => `<dt><span class="sw" style="background:${c}"></span>${esc(l)}</dt><dd>${fmtBytes(b)}</dd>`).join("") + `<dt><b>Total</b></dt><dd><b>${fmtBytes(total)}</b></dd>`;
+  $("#storeBar").innerHTML = total ? parts.filter(p => p[1] > 0).map(([l, b, c]) => `<span style="width:${(b / total * 100).toFixed(2)}%;background:${c}" title="${esc(l)}"></span>`).join("") : "";
+  let q = "";
+  try { const est = await navigator.storage.estimate(); if (est && est.quota) q = `The browser allows this app up to about ${fmtBytes(est.quota)} on this phone.`; } catch (e) {}
+  $("#storageQuota").textContent = q;
+  $("#btnClearPics").disabled = !pics.items;
+}
+$("#btnClearPics").onclick = async () => { try { await caches.delete("mtg-img"); } catch (e) {} toast("Saved card pictures cleared"); renderStorage(); };
 $("#btnSaveKey").onclick = () => {
   const v = $("#apiKey").value.trim(); if (!v) { $("#keyStatus").textContent = "Paste your key first."; return; }
   if (!/^sk-ant-/.test(v)) { $("#keyStatus").textContent = "That doesn't look like a Claude API key. It should start with sk-ant-."; $("#keyStatus").className = "small err"; return; }

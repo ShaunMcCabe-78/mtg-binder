@@ -101,6 +101,12 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .mthumb img{width:90px;height:auto;border-radius:5px;flex:none;border:1px solid var(--line)}
 .dlink{text-align:left;cursor:pointer}
 .dlink b{text-decoration:underline dotted;text-decoration-color:var(--muted);text-underline-offset:3px}
+#storageInfo dd{white-space:nowrap;text-align:right;font-family:var(--mono);font-size:.85rem}
+.storebar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--sunk)}
+.storebar span{display:block;height:100%}
+.kv dt .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:0}
+.kv .fresh{color:var(--muted);font-size:.85em}
+.kv .stale{color:var(--warn);font-size:.85em}
 .badge.set{color:var(--muted);text-transform:none}
 .price .each{color:var(--muted)}
 #collBody .vals,#collBody .lhead{display:none}
@@ -398,7 +404,8 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
       <p class="small" id="keyStatus"></p>
     </div>
     <div class="panel">
-      <h3>Card list</h3>
+      <h3>Data on this phone</h3>
+      <p class="small muted">How recent each part is. The card list and set list come with app updates; new cards, prices and pictures come from Scryfall when online.</p>
       <dl class="kv" id="dbInfo"></dl>
       <button id="btnUpdateNames">Check for new cards</button>
       <p class="small" id="namesStatus"></p>
@@ -415,6 +422,15 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
       <p class="small">Your collections and decks are stored only on this phone. Make a backup now and then: copy it and keep it in a note or email it to yourself. To restore, paste it into "Paste a card list" on the Scan tab; each collection is recreated by name.</p>
       <div class="row"><button id="btnBackup">Copy backup of all collections</button></div>
       <p class="small muted" id="persistStatus"></p>
+    </div>
+    <div class="panel">
+      <h3>Storage</h3>
+      <p class="small muted">Space the app uses on this phone.</p>
+      <div class="storebar" id="storeBar" aria-hidden="true"></div>
+      <dl class="kv" id="storageInfo"><dt>Measuring…</dt><dd></dd></dl>
+      <p class="small muted" id="storageQuota"></p>
+      <div class="row"><button id="btnClearPics">Clear saved card pictures</button></div>
+      <p class="small muted">Card pictures are saved as you view them, so they show offline. Clearing them frees space; they download again when needed. Your cards, decks and settings are not affected.</p>
     </div>
     <div class="panel">
       <h3>Offline scanning</h3>
