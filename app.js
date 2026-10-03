@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.3.2";
+const APP_VERSION = "1.4.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -260,6 +260,33 @@ function cleanOcr(text) {
   }).join("\n");
 }
 // Rebuild lines from word positions so names split into pieces are joined back up.
+/* ---------- name bars: find each card's name strip and read it on its own ---------- */
+function detectBars(src) {
+  const [W, H] = dimsOf(src); const sc = Math.min(1, 1000 / Math.max(W, H));
+  const w = Math.round(W * sc), h = Math.round(H * sc);
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true });
+  x.drawImage(src, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
+  return NameBars.findBars(g, w, h).map(b => ({ x0: b.x0 / sc, y0: b.y0 / sc, x1: b.x1 / sc, y1: b.y1 / sc }));
+}
+// Cut one bar out of the full-size photo at ~60 px tall, clean it up, and put a white margin round it.
+function cropBar(src, b, trimRight, mode) {
+  const bh = b.y1 - b.y0, pad = bh * 0.1, sw = (b.x1 - b.x0) * (1 - trimRight), sh = bh + 2 * pad;
+  const [W, H] = dimsOf(src); const sy = Math.max(0, b.y0 - pad), sx = Math.max(0, b.x0);
+  const sc = 60 / bh, dw = Math.max(1, Math.round(sw * sc)), dh = Math.max(1, Math.round(Math.min(sh, H - sy) * sc)), M = 20;
+  const c = document.createElement("canvas"); c.width = dw + 2 * M; c.height = dh + 2 * M;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.imageSmoothingQuality = "high";
+  x.drawImage(src, sx, sy, Math.min(sw, W - sx), Math.min(sh, H - sy), M, M, dw, dh);
+  const img = x.getImageData(M, M, dw, dh), d = img.data, g = new Uint8Array(dw * dh);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * .299 + d[i + 1] * .587 + d[i + 2] * .114) | 0;
+  const st = NameBars.stretch(g); const bw = mode === "local" ? NameBars.localMean(st, dw, dh, 49, 10) : NameBars.otsu(st);
+  for (let i = 0, j = 0; j < bw.length; i += 4, j++) { d[i] = d[i + 1] = d[i + 2] = bw[j]; d[i + 3] = 255; }
+  x.putImageData(img, M, M);
+  return c;
+}
+
 function regroupWords(data) {
   const ws = ((data && data.words) || []).filter(w => w && w.text && w.text.trim() && w.bbox).map(w => ({ t: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, yc: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }));
   if (!ws.length) return "";
@@ -291,8 +318,24 @@ $("#btnIdentify").onclick = async () => {
       const manual = S.photos[i].rot;
       const deg = manual != null ? manual : await findTextDirection(worker, img, () => { st.textContent = `${lbl}: finding which way the names run…`; });
       const upright = deg ? rotated(img, deg) : img;
-      const vars = [prepCanvas(upright, 3000, true), prepCanvas(upright, 2200, false)];
       const readings = [];
+      // 1. Find the name bars and read each one on its own (one line of text per bar).
+      st.textContent = `${lbl}: finding the name bars…`;
+      const bars = detectBars(upright);
+      if (bars.length) {
+        await worker.setParameters({ tessedit_pageseg_mode: "7" });
+        const a = [], b = [];
+        for (let n = 0; n < bars.length; n++) {
+          if (ocrStop) throw { code: "cancelled" };
+          st.textContent = `${lbl}: reading name ${n + 1} of ${bars.length}…`;
+          a.push(cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0, "otsu"), {}, { text: true })).data.text));
+          b.push(cleanOcr((await worker.recognize(cropBar(upright, bars[n], 0.15, "local"), {}, { text: true })).data.text));
+        }
+        await worker.setParameters({ tessedit_pageseg_mode: "11" });
+        readings.push(a.join("\n"), b.join("\n"));
+      }
+      // 2. Also read the whole photo, to catch any card whose bar wasn't found.
+      const vars = bars.length ? [prepCanvas(upright, 3000, true)] : [prepCanvas(upright, 3000, true), prepCanvas(upright, 2200, false)];
       for (let v = 0; v < vars.length; v++) {
         if (ocrStop) throw { code: "cancelled" };
         ocrPct = p => { st.textContent = `${lbl}… ${Math.round((v + p) / vars.length * 100)}%`; };
