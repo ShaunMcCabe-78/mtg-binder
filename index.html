@@ -107,6 +107,8 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .kv dt .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:0}
 .kv .fresh{color:var(--muted);font-size:.85em}
 .kv .stale{color:var(--warn);font-size:.85em}
+.badge.own{color:var(--accent);text-transform:none}
+.wishbtn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
 .badge.set{color:var(--muted);text-transform:none}
 .price .each{color:var(--muted)}
 #collBody .vals,#collBody .lhead{display:none}
@@ -159,7 +161,7 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .saved .srow > div{min-width:0}
 .kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:.92rem}
 .kv dt{color:var(--muted)} .kv dd{margin:0;overflow-wrap:anywhere}
-nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(5,1fr);gap:2px}
 nav.tabs button{flex-direction:column;gap:2px;border:0;background:transparent;color:var(--muted);font-weight:500;font-size:.78rem;padding:6px 2px}
 nav.tabs button svg{width:24px;height:24px}
 nav.tabs button[aria-selected="true"]{color:var(--accent)}
@@ -347,6 +349,30 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   </section>
 
   <!-- DECK -->
+  <section class="pane" id="pane-wish" hidden>
+    <div class="stack">
+      <div class="row" style="justify-content:space-between">
+        <h2>Wishlist</h2>
+        <span class="small muted" id="wishSummary"></span>
+      </div>
+      <div class="panel stack" style="gap:8px">
+        <label class="field">Add a card you want<input type="text" id="wishName" placeholder="Card name" autocomplete="off" autocapitalize="words"></label>
+        <div class="sugg" id="wishSugg"></div>
+        <div class="row" style="flex-wrap:nowrap"><div class="stepper"><button id="wMinus" aria-label="Fewer">−</button><span id="wQty">1</span><button id="wPlus" aria-label="More">+</button></div><button class="primary" id="btnWishAdd" style="flex:1">Add to wishlist</button></div>
+      </div>
+      <div class="row" style="justify-content:space-between">
+        <select id="wishSort" style="width:auto" aria-label="Sort the wishlist">
+          <option value="added">Recently added</option>
+          <option value="name">Sort by name</option>
+          <option value="each">Sort by price (one copy)</option>
+          <option value="total">Sort by total price</option>
+        </select>
+        <button class="ghost small" id="btnCopyWish">Copy list</button>
+      </div>
+    </div>
+    <div id="wishBody"></div>
+  </section>
+
   <section class="pane" id="pane-deck" hidden>
     <div class="stack">
       <h2>Build a deck</h2>
@@ -442,7 +468,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
       <p class="small muted">Card data from the Forge project and Scryfall. Text reading by Tesseract. Magic: The Gathering is © Wizards of the Coast; this app is unofficial.</p>
       <p class="small muted" id="appVersion"></p>
       <button class="ghost danger" id="btnReset">Erase everything on this phone</button>
-      <div class="panel" id="resetConfirm" hidden><p>Erase your whole collection, saved decks and API key from this phone? This can't be undone.</p><div class="row"><button class="primary" id="yesReset">Erase</button><button id="noReset">Keep</button></div></div>
+      <div class="panel" id="resetConfirm" hidden><p>Erase your whole collection, wishlist, saved decks and API key from this phone? This can't be undone.</p><div class="row"><button class="primary" id="yesReset">Erase</button><button id="noReset">Keep</button></div></div>
     </div>
   </section>
 </div>
@@ -450,6 +476,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 <nav class="tabs" role="tablist">
   <button role="tab" aria-selected="false" data-tab="scan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span class="lbl">Scan</span></button>
   <button role="tab" aria-selected="true" data-tab="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="10" height="14" rx="1.5"/><path d="M17 7h1.5A1.5 1.5 0 0 1 20 8.5v10a1.5 1.5 0 0 1-1.5 1.5H10"/></svg><span class="lbl">Collection</span></button>
+  <button role="tab" aria-selected="false" data-tab="wish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg><span class="lbl">Wishlist</span></button>
   <button role="tab" aria-selected="false" data-tab="deck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="3" width="12" height="17" rx="1.5"/><path d="M3.5 6.5v13M20.5 6.5v13"/></svg><span class="lbl">Deck</span></button>
   <button role="tab" aria-selected="false" data-tab="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span class="lbl">Settings</span></button>
 </nav>
