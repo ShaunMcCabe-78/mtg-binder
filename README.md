@@ -42,6 +42,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 ## Security
 - The text reader is loaded from jsDelivr at a pinned version, with SHA-256 fingerprints (subresource integrity): a changed file is refused.
 - A Content Security Policy only allows code from this site and that pinned reader, and only sends data to Scryfall and Anthropic.
+- **Sensitive data check:** `scripts/check-secrets.sh` blocks API keys, tokens, passwords, personal email addresses (in files and commit details) and photos (which can carry GPS location). It runs before every commit (enable with `git config core.hooksPath .githooks`) and on GitHub for every push (`.github/workflows/secret-scan.yml`).
 - The Anthropic API key is stored only on the phone. Use a key just for this app with a monthly spending limit.
 
 Magic: The Gathering is © Wizards of the Coast. This is an unofficial fan project.
