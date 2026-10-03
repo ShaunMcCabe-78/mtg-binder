@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.9.3";
+const APP_VERSION = "1.9.4";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -407,7 +407,7 @@ $("#btnIdentify").onclick = async () => {
   const st = $("#scanStatusTxt");
   $("#btnIdentify").disabled = true; $("#scanStatus").hidden = false;
   st.textContent = ocrWorkerP ? "Starting the reader…" : "Loading the reader (the first time takes a little while)…";
-  const found = new Map(); const leftovers = new Set(); const notes = []; let hint = null;
+  const found = new Map(); const leftovers = new Set(); const notes = []; let hint = null; const missing = [];
   try {
     let worker;
     try { worker = await getOcr(); } catch (e) { throw { code: "ocr_load", message: String(e && e.message || e) }; }
@@ -432,7 +432,12 @@ $("#btnIdentify").onclick = async () => {
       const deg = manual != null ? manual : await ScanCore.findTextDirection(ctx, img);
       const upright = deg ? ScanCore.rotated(img, deg) : img;
       const res = await scanner.scan(ctx, upright);
-      if (res.grid && !res.hint) notes.push(`${S.photos.length > 1 ? `Photo ${i + 1}: ` : ""}found a grid of ${res.grid.rows} × ${res.grid.cols}.`);
+      if (res.grid && !res.hint) {
+        // A grid should have a card in every square: say how many were read, and list the rest for a check.
+        const miss = (res.missing || []).length, all = res.grid.cells || res.grid.rows * res.grid.cols;
+        notes.push(`${S.photos.length > 1 ? `Photo ${i + 1}: ` : ""}found a grid of ${res.grid.rows} × ${res.grid.cols}` + (miss ? ` — read ${all - miss} of ${all} cards; ${miss === 1 ? "1 square needs" : miss + " squares need"} your check (marked missing below).` : ` — all ${all} cards read.`));
+        for (const m of res.missing || []) missing.push({ ...m, photo: S.photos.length > 1 ? i + 1 : 0 });
+      }
       if (res.hint) hint = res.hint;
       for (const c of res.cards) {
         let f = found.get(c.name);
@@ -442,6 +447,8 @@ $("#btnIdentify").onclick = async () => {
       res.leftovers.forEach(l => leftovers.add(l));
     }
     S.review = [...found.values()].map(c => ({ name: c.name, qty: c.qty, low: c.score < 0.95, sets: c.sets }));
+    // Squares where no card could be read: an empty entry with a picture of the square, to name by hand (or remove).
+    for (const m of missing) S.review.push({ name: "", qty: 1, low: true, missing: m });
     S.leftovers = [...leftovers];
     $("#scanNote").textContent = notes.join(" "); $("#scanNote").hidden = !notes.length;
     // The photo looks like the other layout: offer to scan it again that way.
@@ -476,11 +483,12 @@ function renderReview(scroll) {
   $("#reviewCount").textContent = `${n} card${n === 1 ? "" : "s"}, ${S.review.length} unique`;
   $("#reviewList").innerHTML = S.review.length ? S.review.map((c, i) => {
     const known = matcher && matcher.isCard(c.name);
-    const sug = !known && matcher ? matcher.suggest(c.name, 3) : [];
+    const sug = !known && matcher && c.name.trim() ? matcher.suggest(c.name, 3) : [];
     const ci = info(c.name);
-    return `<div class="crow rv">
-      <input class="nm-edit" type="text" id="rv-${i}" data-i="${i}" value="${esc(c.name)}" aria-label="Card name" autocomplete="off">
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${setChips(c.sets)}${foilChip(c)}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
+    const ms = c.missing;
+    return `<div class="crow rv${ms ? " missing" : ""}">${ms ? `<div class="mthumb">${ms.thumb ? `<img src="${ms.thumb}" alt="The unread card">` : ""}<span class="small"><span class="badge bad">missing</span> ${ms.photo ? `Photo ${ms.photo}, ` : ""}row ${ms.row + 1}, column ${ms.col + 1}: no card name could be read here. Type it, or remove this if the square is empty.</span></div>` : ""}
+      <input class="nm-edit" type="text" id="rv-${i}" data-i="${i}" value="${esc(c.name)}" aria-label="Card name" autocomplete="off"${ms ? ' placeholder="Type this card\'s name"' : ""}>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${setChips(c.sets)}${foilChip(c)}${ms && !c.name.trim() ? "" : !known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
       <div class="ctl stepper"><button data-dec="${i}" aria-label="Fewer">−</button><span>${c.qty}</span><button data-inc="${i}" aria-label="More">+</button></div>
       ${sug.length ? `<div class="sugg"><span class="small muted">Did you mean</span>${sug.map(s => `<button data-fix="${i}" data-name="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
     </div>`;
@@ -518,6 +526,9 @@ $("#leftList").addEventListener("click", e => {
 });
 $("#btnDiscard").onclick = () => { S.review = []; S.leftovers = []; renderReview(); };
 $("#btnAddReviewed").onclick = () => {
+  // Missing squares need a decision first: name the card, or remove the entry if the square is empty.
+  const unnamed = S.review.findIndex(c => c.missing && !c.name.trim());
+  if (unnamed >= 0) { toast("Name the missing card, or remove it if that square is empty"); const el = $("#rv-" + unnamed); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.focus(); } return; }
   const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col, sets: c.sets, foil: c.foil }));
   if (!items.length) return;
   addToCollection(items, S.target);
