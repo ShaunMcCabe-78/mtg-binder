@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.8.4";
+const APP_VERSION = "1.8.5";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -574,8 +574,11 @@ function renderColl() {
   const q = keyOf($("#collSearch").value); const sort = $("#collSort").value;
   let rows = all.filter(([k, c]) => { const ci = info(c.name) || {}; return (!q || k.includes(q) || (ci.t || "").toLowerCase().includes(q) || (ci.o || "").toLowerCase().includes(q)) && (!S.filter.size || S.filter.has(colorBucket(c.name))); });
   const mv = c => (info(c.name) || {}).v || 0;
-  const val1 = c => entryValue(c).v;
-  rows.sort((a, b) => sort === "value" ? (val1(b[1]) - val1(a[1])) || a[0].localeCompare(b[0]) : sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
+  // "each": the most valuable single copy (then the total); "value": all copies together.
+  const vals = new Map(rows.map(([k, c]) => { const e = entryValue(c); return [k, { each: e.lo === Infinity ? 0 : e.hi, total: e.v }]; }));
+  const byEach = (a, b) => (vals.get(b[0]).each - vals.get(a[0]).each) || (vals.get(b[0]).total - vals.get(a[0]).total) || a[0].localeCompare(b[0]);
+  const byTotal = (a, b) => (vals.get(b[0]).total - vals.get(a[0]).total) || (vals.get(b[0]).each - vals.get(a[0]).each) || a[0].localeCompare(b[0]);
+  rows.sort((a, b) => sort === "each" ? byEach(a, b) : sort === "value" ? byTotal(a, b) : sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
   const single = view !== "all";
   const sel = S.sel;
   if (sel) { const have = new Set(all.map(([k]) => k)); for (const k of [...sel]) if (!have.has(k)) sel.delete(k); }
