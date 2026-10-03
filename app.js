@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.8.2";
+const APP_VERSION = "1.8.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -157,13 +157,19 @@ function copyPrice(name, key) {
 // Value of a collection entry (all its copies). missing: copies without a price.
 function entryValue(c) {
   if (BASIC_SET.has(keyOf(c.name))) return { v: 0, missing: 0, approx: false };   // basic lands: not priced
-  let v = 0, missing = 0, approx = false, rest = c.qty;
-  for (const [key, n] of Object.entries(c.sets || {})) { const p = copyPrice(c.name, key); if (p) { v += p.v * n; approx = approx || p.approx; } else missing += n; rest -= n; }
-  if (rest > 0) { const p = copyPrice(c.name); if (p) v += p.v * rest; else missing += rest; }
-  return { v, missing, approx };
+  let v = 0, missing = 0, approx = false, rest = c.qty, lo = Infinity, hi = 0;
+  const one = p => { lo = Math.min(lo, p); hi = Math.max(hi, p); };
+  for (const [key, n] of Object.entries(c.sets || {})) { const p = copyPrice(c.name, key); if (p) { v += p.v * n; approx = approx || p.approx; one(p.v); } else missing += n; rest -= n; }
+  if (rest > 0) { const p = copyPrice(c.name); if (p) { v += p.v * rest; one(p.v); } else missing += rest; }
+  return { v, missing, approx, lo, hi };
 }
 function valueOf(cards) { let v = 0, missing = 0; for (const c of cards) { const e = entryValue(c); v += e.v; missing += e.missing; } return { v, missing }; }
-const priceHTML = e => e && e.v > 0 ? `<span class="price">${fmtEur(e.v)}</span>` : "";
+// One copy's value; a range when copies are different printings with different prices.
+const eachText = e => e.lo === Infinity ? "" : e.lo === e.hi ? fmtEur(e.lo) : `${fmtEur(e.lo)}–${fmtEur(e.hi)}`;
+// In the list: total, plus each copy's value when there are several ("€0.50 (€0.25 each)").
+const priceHTML = (e, qty) => e && e.v > 0 ? `<span class="price inl">${fmtEur(e.v)}${qty > 1 ? ` <span class="each">(${eachText(e)} each)</span>` : ""}</span>` : "";
+// Wide screens (landscape): separate Each and Total columns.
+const valsHTML = e => `<div class="vals"><span>${e && e.v > 0 ? eachText(e) : "–"}</span><span>${e && e.v > 0 ? fmtEur(e.v) : "–"}</span></div>`;
 
 let pricesBusy = null;
 // Fetch prices for every card owned. all: refresh everything (else only cards without a price yet).
@@ -575,10 +581,11 @@ function renderColl() {
   if (sel) { const have = new Set(all.map(([k]) => k)); for (const k of [...sel]) if (!have.has(k)) sel.delete(k); }
   S.shown = rows.map(([k]) => k);
   body.classList.toggle("selecting", !!sel);
-  body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); const on = sel && sel.has(k); return `
+  body.innerHTML = rows.length ? `<div class="list"><div class="crow lhead" aria-hidden="true"><span>Card</span><div class="vals"><span>Each</span><span>Total</span></div><span class="ctl">Copies</span></div>${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); const on = sel && sel.has(k); const ev = entryValue(c); return `
     <div class="crow${on ? " picked" : ""}">
       <button class="nm" data-open="${esc(k)}"${sel ? ` aria-pressed="${on}"` : ""}>${sel ? `<span class="tick" aria-hidden="true">${on ? "✓" : ""}</span>` : ""}${esc(c.name)}</button>
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(entryValue(c))}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(ev, c.qty)}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      ${valsHTML(ev)}
       ${sel ? `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>` : single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
         : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
     </div>`; }).join("")}</div>` : `<p class="muted">No cards match.</p>`;
