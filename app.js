@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.8.5";
+const APP_VERSION = "1.9.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -44,6 +44,7 @@ function merged(scope) {
     for (const [k, c] of Object.entries(col.cards)) {
       const m = out[k] || (out[k] = { name: c.name, qty: 0, added: 0, where: {}, sets: {} });
       for (const [sk, n] of Object.entries(c.sets || {})) m.sets[sk] = (m.sets[sk] || 0) + n;
+      for (const [fk, n] of Object.entries(c.foil || {})) (m.foil = m.foil || {})[fk] = (m.foil[fk] || 0) + n;
       m.qty += c.qty; m.added = Math.max(m.added, c.added || 0); m.where[id] = c.qty;
     }
   }
@@ -128,16 +129,39 @@ async function fetchPrintsOnline(name) {
     return true;
   } catch (e) { return false; }
 }
-// Keep a card's set counts within its total.
+/* Foil copies: foil: { "SOS:178": 1, "": 2 } counts foil copies per printing ("" = copies without a recorded set),
+   each within the number of copies of that printing. */
+const foilTotal = c => Object.values(c.foil || {}).reduce((a, n) => a + n, 0);
+// Keep a card's set and foil counts within its total.
 function tidySets(c) {
-  if (!c.sets) return c;
-  let room = c.qty;
-  for (const k of Object.keys(c.sets)) { const n = Math.min(c.sets[k] | 0, room); if (n > 0) { c.sets[k] = n; room -= n; } else delete c.sets[k]; }
-  if (!Object.keys(c.sets).length) delete c.sets;
+  if (c.sets) {
+    let room = c.qty;
+    for (const k of Object.keys(c.sets)) { const n = Math.min(c.sets[k] | 0, room); if (n > 0) { c.sets[k] = n; room -= n; } else delete c.sets[k]; }
+    if (!Object.keys(c.sets).length) delete c.sets;
+  }
+  if (c.foil) {
+    const plain = c.qty - Object.values(c.sets || {}).reduce((a, n) => a + n, 0);
+    for (const k of Object.keys(c.foil)) { const n = Math.min(c.foil[k] | 0, k ? (c.sets || {})[k] || 0 : plain); if (n > 0) c.foil[k] = n; else delete c.foil[k]; }
+    if (!Object.keys(c.foil).length) delete c.foil;
+  }
   return c;
 }
-function addSets(c, sets) { if (!sets) return; c.sets = c.sets || {}; for (const [k, n] of Object.entries(sets)) c.sets[k] = (c.sets[k] || 0) + n; tidySets(c); }
+function addSets(c, sets, foil) {
+  if (sets) { c.sets = c.sets || {}; for (const [k, n] of Object.entries(sets)) c.sets[k] = (c.sets[k] || 0) + n; }
+  if (foil) { c.foil = c.foil || {}; for (const [k, n] of Object.entries(foil)) c.foil[k] = (c.foil[k] || 0) + n; }
+  tidySets(c);
+}
+// Every copy of an entry as { key, foil } (key "" = no set recorded).
+function copiesOf(c) {
+  const out = [], f = { ...(c.foil || {}) };
+  const push = (key, n) => { for (let i = 0; i < n; i++) { const fo = (f[key] || 0) > 0; if (fo) f[key]--; out.push({ key, foil: fo }); } };
+  let rest = c.qty;
+  for (const [key, n] of Object.entries(c.sets || {})) { push(key, n); rest -= n; }
+  if (rest > 0) push("", rest);
+  return out;
+}
 const setChips = sets => sets ? Object.entries(sets).map(([k, n]) => `<span class="badge set">${esc(printLabel(k))}${n > 1 ? " ×" + n : ""}</span>`).join("") : "";
+const foilChip = c => { const n = foilTotal(c); return n ? `<span class="badge foil">✦ Foil${n > 1 ? " ×" + n : ""}</span>` : ""; };
 
 /* ---------- prices: Cardmarket euro prices via Scryfall (updated once a day) ----------
    Kept on the phone so they show offline. Price ids: "SOS:178" (a printing), "SOA:|Zombify" (set known, number not),
@@ -150,17 +174,23 @@ function priceId(name, key) {
   const [code, num] = key.split(":"); return num ? code + ":" + num : code + ":|" + name;
 }
 // One copy's price: its printing's, or the card's usual price when the printing has none. approx: not the exact printing.
-function copyPrice(name, key) {
-  if (key) { const v = PRICES.p[priceId(name, key)]; if (v && v[0] != null) return { v: v[0], approx: !key.split(":")[1] }; }
-  const g = PRICES.p[priceId(name)]; return g && g[0] != null ? { v: g[0], approx: !!key } : null;
+// A foil copy uses the foil price; when there's none, the normal price (marked approximate).
+function copyPrice(name, key, foil) {
+  const i = foil ? 1 : 0;
+  if (key) { const v = PRICES.p[priceId(name, key)]; if (v && v[i] != null) return { v: v[i], approx: !key.split(":")[1] }; }
+  const g = PRICES.p[priceId(name)]; if (g && g[i] != null) return { v: g[i], approx: !!key };
+  if (foil) { const p = copyPrice(name, key, false); return p && { v: p.v, approx: true }; }
+  return null;
 }
 // Value of a collection entry (all its copies). missing: copies without a price.
 function entryValue(c) {
   if (BASIC_SET.has(keyOf(c.name))) return { v: 0, missing: 0, approx: false };   // basic lands: not priced
-  let v = 0, missing = 0, approx = false, rest = c.qty, lo = Infinity, hi = 0;
-  const one = p => { lo = Math.min(lo, p); hi = Math.max(hi, p); };
-  for (const [key, n] of Object.entries(c.sets || {})) { const p = copyPrice(c.name, key); if (p) { v += p.v * n; approx = approx || p.approx; one(p.v); } else missing += n; rest -= n; }
-  if (rest > 0) { const p = copyPrice(c.name); if (p) { v += p.v * rest; one(p.v); } else missing += rest; }
+  let v = 0, missing = 0, approx = false, lo = Infinity, hi = 0;
+  for (const cp of copiesOf(c)) {
+    const p = copyPrice(c.name, cp.key, cp.foil);
+    if (!p) { missing++; continue; }
+    v += p.v; approx = approx || p.approx; lo = Math.min(lo, p.v); hi = Math.max(hi, p.v);
+  }
   return { v, missing, approx, lo, hi };
 }
 function valueOf(cards) { let v = 0, missing = 0; for (const c of cards) { const e = entryValue(c); v += e.v; missing += e.missing; } return { v, missing }; }
@@ -286,7 +316,7 @@ function addToCollection(items, colId) {
     const cards = S.cols[id].cards; const k = keyOf(name);
     if (cards[k]) { cards[k].qty += c.qty; cards[k].added = at; }
     else cards[k] = { name, qty: c.qty, added: at };
-    addSets(cards[k], c.sets);
+    addSets(cards[k], c.sets, c.foil);
     byCol[id] = (byCol[id] || 0) + c.qty;
   }
   persist(); renderHeader(); renderColSelects();
@@ -441,7 +471,7 @@ function renderReview(scroll) {
     const ci = info(c.name);
     return `<div class="crow rv">
       <input class="nm-edit" type="text" id="rv-${i}" data-i="${i}" value="${esc(c.name)}" aria-label="Card name" autocomplete="off">
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${setChips(c.sets)}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${setChips(c.sets)}${foilChip(c)}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
       <div class="ctl stepper"><button data-dec="${i}" aria-label="Fewer">−</button><span>${c.qty}</span><button data-inc="${i}" aria-label="More">+</button></div>
       ${sug.length ? `<div class="sugg"><span class="small muted">Did you mean</span>${sug.map(s => `<button data-fix="${i}" data-name="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
     </div>`;
@@ -479,7 +509,7 @@ $("#leftList").addEventListener("click", e => {
 });
 $("#btnDiscard").onclick = () => { S.review = []; S.leftovers = []; renderReview(); };
 $("#btnAddReviewed").onclick = () => {
-  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col, sets: c.sets }));
+  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col, sets: c.sets, foil: c.foil }));
   if (!items.length) return;
   addToCollection(items, S.target);
   const multi = items.some(i => i.col && i.col !== S.target);
@@ -528,13 +558,17 @@ $("#btnPasteAdd").onclick = () => {
     // "Name (SOS) 178" keeps the printing.
     const pm = name.match(/\s*\(([A-Za-z0-9]{2,6})\)\s*([^\s*]*)\s*(\*F\*)?$/);
     const sets = pm ? { [pm[1].toUpperCase() + ":" + (pm[2] || "")]: qty } : undefined;
+    // "*F*" at the end marks foil copies (the usual deck-list style).
+    const isFoil = /\*F\*\s*$/i.test(name);
+    const foil = isFoil ? { [sets ? Object.keys(sets)[0] : ""]: qty } : undefined;
+    name = name.replace(/\s*\*F\*\s*$/i, "");
     name = name.replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\([A-Za-z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
     if (!name) continue;
     const can = matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name);
-    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined, sets });
+    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined, sets, foil });
   }
   if (!items.length) return;
-  for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) { ex.qty += it.qty; addSets(ex, it.sets); } else S.review.push(it); }
+  for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) { ex.qty += it.qty; addSets(ex, it.sets, it.foil); } else S.review.push(it); }
   $("#pasteList").value = "";
   renderReview(true);
 };
@@ -572,7 +606,7 @@ function renderColl() {
     $("#goScan").onclick = () => { if (view !== "all") { S.target = view; persist(); renderColSelects(); } showTab("scan"); }; return;
   }
   const q = keyOf($("#collSearch").value); const sort = $("#collSort").value;
-  let rows = all.filter(([k, c]) => { const ci = info(c.name) || {}; return (!q || k.includes(q) || (ci.t || "").toLowerCase().includes(q) || (ci.o || "").toLowerCase().includes(q)) && (!S.filter.size || S.filter.has(colorBucket(c.name))); });
+  let rows = all.filter(([k, c]) => { const ci = info(c.name) || {}; return (!q || k.includes(q) || (q === "foil" && foilTotal(c) > 0) || (ci.t || "").toLowerCase().includes(q) || (ci.o || "").toLowerCase().includes(q)) && (!S.filter.size || S.filter.has(colorBucket(c.name))); });
   const mv = c => (info(c.name) || {}).v || 0;
   // "each": the most valuable single copy (then the total); "value": all copies together.
   const vals = new Map(rows.map(([k, c]) => { const e = entryValue(c); return [k, { each: e.lo === Infinity ? 0 : e.hi, total: e.v }]; }));
@@ -587,7 +621,7 @@ function renderColl() {
   body.innerHTML = rows.length ? `<div class="list"><div class="crow lhead" aria-hidden="true"><span>Card</span><div class="vals"><span>Each</span><span>Total</span></div><span class="ctl">Copies</span></div>${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); const on = sel && sel.has(k); const ev = entryValue(c); return `
     <div class="crow${on ? " picked" : ""}">
       <button class="nm" data-open="${esc(k)}"${sel ? ` aria-pressed="${on}"` : ""}>${sel ? `<span class="tick" aria-hidden="true">${on ? "✓" : ""}</span>` : ""}${esc(c.name)}</button>
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(ev, c.qty)}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(ev, c.qty)}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${foilChip(c)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
       ${valsHTML(ev)}
       ${sel ? `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>` : single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
         : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
@@ -640,11 +674,12 @@ $("#collBody").addEventListener("click", e => {
 // withSets: copies with a known printing get their own "2 Name (SOS) 178" line (the usual deck-list style), so a restore keeps them.
 function collText(scope, withSets) {
   const lines = c => {
-    if (!withSets || !c.sets) return [`${c.qty} ${c.name}`];
-    const out = []; let rest = c.qty;
-    for (const [key, n] of Object.entries(c.sets)) { const [code, num] = key.split(":"); out.push(`${n} ${c.name} (${code})${num ? " " + num : ""}`); rest -= n; }
-    if (rest > 0) out.unshift(`${rest} ${c.name}`);
-    return out;
+    if (!withSets || (!c.sets && !c.foil)) return [`${c.qty} ${c.name}`];
+    // One line per printing and finish: "2 Name (SOS) 178", "1 Name (SOS) 178 *F*".
+    const groups = new Map();
+    for (const cp of copiesOf(c)) { const g = cp.key + "|" + (cp.foil ? 1 : 0); groups.set(g, (groups.get(g) || 0) + 1); }
+    return [...groups].map(([g, n]) => { const [key, fo] = g.split("|"); const [code, num] = key.split(":");
+      return `${n} ${c.name}${code ? ` (${code})${num ? " " + num : ""}` : ""}${fo === "1" ? " *F*" : ""}`; });
   };
   return (scope === "all" ? S.order : [scope]).filter(id => Object.keys(S.cols[id].cards).length).map(id =>
     `# Collection: ${S.cols[id].name}\n` + Object.values(S.cols[id].cards).sort((a, b) => a.name.localeCompare(b.name)).flatMap(lines).join("\n")).join("\n\n");
@@ -670,7 +705,7 @@ $("#newColName").addEventListener("keydown", e => { if (e.key === "Enter") $("#b
 $("#btnRenameCol").onclick = () => { const v = $("#renameCol").value.trim().slice(0, 40); if (!v || !S.cols[S.view]) return; S.cols[S.view].name = v; persist(); renderColl(); toast("Renamed"); };
 $("#btnMergeCol").onclick = () => {
   const from = S.cols[S.view], toId = $("#mergeSel").value, to = S.cols[toId]; if (!from || !to) return;
-  for (const [k, c] of Object.entries(from.cards)) { if (to.cards[k]) { to.cards[k].qty += c.qty; addSets(to.cards[k], c.sets); } else to.cards[k] = { ...c, sets: c.sets ? { ...c.sets } : undefined }; tidySets(to.cards[k]); }
+  for (const [k, c] of Object.entries(from.cards)) { if (to.cards[k]) { to.cards[k].qty += c.qty; addSets(to.cards[k], c.sets, c.foil); } else to.cards[k] = { ...c, sets: c.sets ? { ...c.sets } : undefined, foil: c.foil ? { ...c.foil } : undefined }; tidySets(to.cards[k]); }
   const n = colCount(S.view); from.cards = {}; persist(); toast(`Moved ${n} card${n === 1 ? "" : "s"} to ${to.name}`); renderColl();
 };
 $("#btnDeleteCol").onclick = () => { const n = colCount(S.view); $("#delColMsg").textContent = `Delete "${colName(S.view)}"` + (n ? ` and the ${n} card${n === 1 ? "" : "s"} in it? To keep the cards, move them into another collection first.` : "?"); $("#delColConfirm").hidden = false; };
@@ -691,22 +726,17 @@ function openCard(k) {
     return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(c.name)}${code ? "&set=" + encodeURIComponent(code.toLowerCase()) : ""}&format=image&version=normal`;
   };
   const qty = {}, copies = {};
-  // One entry per copy: its printing ("SOS:178"), or "" when no set is recorded.
-  for (const id of S.order) {
-    const e = S.cols[id].cards[k]; qty[id] = e ? e.qty : 0; copies[id] = [];
-    for (const [sk, n] of Object.entries((e && e.sets) || {})) for (let i = 0; i < n; i++) copies[id].push(sk);
-    while (copies[id].length < qty[id]) copies[id].push("");
-    copies[id].length = qty[id];
-  }
-  const firstSet = () => { for (const id of S.order) { const x = copies[id].find(Boolean); if (x) return x; } return ""; };
+  // One entry per copy: { key: its printing ("SOS:178") or "" when no set is recorded, foil }.
+  for (const id of S.order) { const e = S.cols[id].cards[k]; qty[id] = e ? e.qty : 0; copies[id] = e ? copiesOf(e) : []; }
+  const firstSet = () => { for (const id of S.order) { const x = copies[id].find(cp => cp.key); if (x) return x.key; } return ""; };
   const setOpts = cur => {
     const list = printsOf(c.name), keys = list.map(p => p.code + ":" + p.num);
     if (cur && !keys.includes(cur)) keys.unshift(cur);
     return `<option value="">Set not recorded</option>` + keys.map(key => `<option value="${esc(key)}"${key === cur ? " selected" : ""}>${esc(printLabel(key, true))}${key.endsWith(":") ? " (number unknown)" : ""}</option>`).join("");
   };
   const whereHTML = () => S.order.map(id => `<div class="wrow"><span>${esc(S.cols[id].name)}</span><div class="stepper"><button data-wdec="${id}" aria-label="Fewer in ${esc(S.cols[id].name)}">−</button><span>${qty[id]}</span><button data-winc="${id}" aria-label="More in ${esc(S.cols[id].name)}">+</button></div></div>` +
-    (qty[id] ? `<div class="sets">${copies[id].map((key, i) => { const p = copyPrice(c.name, key);
-      return `<label class="setrow"><span class="small muted">${qty[id] > 1 ? "Copy " + (i + 1) : "Set"}</span><select data-scol="${id}" data-si="${i}" aria-label="Set of copy ${i + 1} in ${esc(S.cols[id].name)}">${setOpts(key)}</select><span class="price">${p ? (p.approx ? "≈" : "") + fmtEur(p.v) : "–"}</span></label>`; }).join("")}</div>` : "")).join("");
+    (qty[id] ? `<div class="sets">${copies[id].map((cp, i) => { const p = copyPrice(c.name, cp.key, cp.foil);
+      return `<div class="setrow"><span class="small muted">${qty[id] > 1 ? "Copy " + (i + 1) : "Set"}</span><select data-scol="${id}" data-si="${i}" aria-label="Set of copy ${i + 1} in ${esc(S.cols[id].name)}">${setOpts(cp.key)}</select><button class="foilbtn" data-fcol="${id}" data-fi="${i}" aria-pressed="${cp.foil}" aria-label="Copy ${i + 1} is foil">✦ Foil</button><span class="price">${p ? (p.approx ? "≈" : "") + fmtEur(p.v) : "–"}</span></div>`; }).join("")}</div>` : "")).join("");
   // Price line: the shown printing's price and foil price.
   const priceLine = () => {
     const key = firstSet(), v = PRICES.p[priceId(c.name, key)], g = PRICES.p[priceId(c.name)];
@@ -719,7 +749,7 @@ function openCard(k) {
     <div class="cardimg" id="shImg">${navigator.onLine ? `<img src="${img}" alt="${esc(c.name)}" loading="lazy">` : "Picture needs internet"}</div>
     ${ci ? `<div class="stack" style="gap:6px"><div class="row">${costHTML(ci.c)}<span class="small muted">mana value ${ci.v}</span></div><b>${esc(ci.t)}${ci.p ? " · " + esc(ci.p) : ""}${ci.l ? " · loyalty " + esc(ci.l) : ""}</b>${ci.o ? `<p class="oracle">${esc(ci.o)}</p>` : ""}</div>` : `<p class="note">This name isn't in the card list. If it's misspelled, rename it below.</p>`}
     <p class="small" id="shPrice">${priceLine()}</p>
-    <div class="stack" style="gap:6px"><h3>Copies and sets</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another. Pick a set to record which printing a copy is.</p><button class="ghost small" id="shMorePrints" hidden>Look for more printings online</button></div>
+    <div class="stack" style="gap:6px"><h3>Copies and sets</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another. Pick a set to record which printing a copy is, and tap ✦ Foil for foil copies.</p><button class="ghost small" id="shMorePrints" hidden>Look for more printings online</button></div>
     <label class="field">Rename / correct this card<input type="text" id="shName" value="${esc(c.name)}" autocomplete="off" autocapitalize="words"></label>
     <div class="sugg" id="shSugg"></div>
     <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove everywhere</button></div>
@@ -736,22 +766,24 @@ function openCard(k) {
   const morePrints = $("#shMorePrints");
   const refreshSets = () => { if (!$("#shWhere")) return; $("#shWhere").innerHTML = whereHTML(); $("#shPrice").innerHTML = priceLine(); };
   // Fetch prices for the printings on screen that don't have one yet.
-  const loadSheetPrices = () => { const ids = [priceId(c.name)]; for (const id of S.order) for (const key of copies[id]) if (key) ids.push(priceId(c.name, key)); updatePrices(false, ids).then(ch => { if (ch) refreshSets(); }); };
+  const loadSheetPrices = () => { const ids = [priceId(c.name)]; for (const id of S.order) for (const cp of copies[id]) if (cp.key) ids.push(priceId(c.name, cp.key)); updatePrices(false, ids).then(ch => { if (ch) refreshSets(); }); };
   loadSheetPrices();
   morePrints.hidden = !navigator.onLine;
   morePrints.onclick = async () => { morePrints.disabled = true; morePrints.textContent = "Looking…"; const got = await fetchPrintsOnline(c.name); refreshSets(); morePrints.textContent = got ? "More printings added" : "No more printings found"; };
   // The full printings list loads on first use.
   loadPrints().then(() => { if ($("#shWhere")) refreshSets(); if (!printsOf(c.name).length) fetchPrintsOnline(c.name).then(got => { if (got && $("#shWhere")) refreshSets(); }); });
-  $("#shWhere").onchange = e => { const t = e.target; if (t.dataset.scol == null) return; copies[t.dataset.scol][+t.dataset.si] = t.value; showImg(t.value || firstSet()); refreshSets(); loadSheetPrices(); };
+  $("#shWhere").onchange = e => { const t = e.target; if (t.dataset.scol == null) return; copies[t.dataset.scol][+t.dataset.si].key = t.value; showImg(t.value || firstSet()); refreshSets(); loadSheetPrices(); };
   $("#shClose").onclick = closeSheet;
   $("#shWhere").onclick = e => { const b = e.target.closest("button"); if (!b) return;
-    if (b.dataset.winc) { qty[b.dataset.winc]++; copies[b.dataset.winc].push(""); }
+    if (b.dataset.winc) { qty[b.dataset.winc]++; copies[b.dataset.winc].push({ key: "", foil: false }); }
     else if (b.dataset.wdec) {
       const id = b.dataset.wdec; if (!qty[id]) return; qty[id]--;
-      // Take away a copy without a set first.
-      const a = copies[id], i = a.lastIndexOf(""); a.splice(i >= 0 ? i : a.length - 1, 1);
-    } else return;
-    $("#shWhere").innerHTML = whereHTML(); };
+      // Take away a plain copy without a set first.
+      const a = copies[id]; let i = -1; for (let j = a.length - 1; j >= 0; j--) if (!a[j].key && !a[j].foil) { i = j; break; }
+      a.splice(i >= 0 ? i : a.length - 1, 1);
+    } else if (b.dataset.fcol) { const cp = copies[b.dataset.fcol][+b.dataset.fi]; cp.foil = !cp.foil; }
+    else return;
+    refreshSets(); };
   $("#shName").oninput = () => { const v = $("#shName").value; $("#shSugg").innerHTML = matcher && v.trim().length >= 2 && !matcher.isCard(v) ? suggHTML(matcher.suggest(v, 5), "pick") : ""; };
   $("#shSugg").onclick = e => { const b = e.target.closest("button[data-pick]"); if (!b) return; $("#shName").value = b.dataset.pick; $("#shSugg").innerHTML = ""; };
   $("#shSave").onclick = () => {
@@ -761,9 +793,14 @@ function openCard(k) {
       const cards = S.cols[id].cards; const old = cards[k]; delete cards[k];
       const q = qty[id]; if (q <= 0) continue;
       // Sets belong to this card: renaming to a different card drops them.
-      const sets = {}; if (nk === k) for (const key of copies[id]) if (key) sets[key] = (sets[key] || 0) + 1;
-      if (nk !== k && cards[nk]) cards[nk].qty += q;
-      else { cards[nk] = { name, qty: q, added: old ? old.added : Date.now() }; if (Object.keys(sets).length) cards[nk].sets = sets; tidySets(cards[nk]); }
+      const sets = {}, foil = {};
+      for (const cp of copies[id]) {
+        const key = nk === k ? cp.key : "";
+        if (key) sets[key] = (sets[key] || 0) + 1;
+        if (cp.foil) foil[key] = (foil[key] || 0) + 1;   // foil stays with the copy even if the card is renamed
+      }
+      if (nk !== k && cards[nk]) { cards[nk].qty += q; addSets(cards[nk], null, foil); }
+      else { cards[nk] = { name, qty: q, added: old ? old.added : Date.now() }; if (Object.keys(sets).length) cards[nk].sets = sets; if (Object.keys(foil).length) cards[nk].foil = foil; tidySets(cards[nk]); }
     }
     if (nk !== k) fetchMissingDetails([name]);
     persist(); renderHeader(); renderColl(); closeSheet(); toast("Saved");
@@ -925,7 +962,7 @@ function deckValueHTML(d) {
   for (const c of d.cards) {
     if (BASIC_SET.has(keyOf(c.name))) continue;
     const o = own[keyOf(c.name)], prices = [];
-    for (const [key, n] of Object.entries((o && o.sets) || {})) { const p = copyPrice(c.name, key); for (let i = 0; i < n; i++) prices.push(p ? p.v : null); }
+    for (const cp of o ? copiesOf(o) : []) { const p = copyPrice(c.name, cp.key, cp.foil); prices.push(p ? p.v : null); }
     const g = copyPrice(c.name); while (prices.length < c.qty) prices.push(g ? g.v : null);
     prices.sort((p, q) => (p ?? Infinity) - (q ?? Infinity));
     for (const p of prices.slice(0, c.qty)) { if (p == null) missing++; else v += p; }

@@ -181,7 +181,10 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 .where .wrow{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .where .wrow span{min-width:0;overflow-wrap:anywhere}
 .where .sets{display:flex;flex-direction:column;gap:6px;padding-left:10px;border-left:2px solid var(--line)}
-.where .setrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px}
+.where .setrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px}
+.foilbtn{min-height:38px;padding:0 10px;font-size:.82rem;white-space:nowrap;color:var(--muted)}
+.foilbtn[aria-pressed="true"]{background:linear-gradient(120deg,#e8d27a,#a8d8e8,#d9a8e8);color:#1d2421;border-color:transparent;font-weight:700}
+.badge.foil{text-transform:none;color:#1d2421;border-color:transparent;background:linear-gradient(120deg,#e8d27a,#a8d8e8,#d9a8e8)}
 .where .setrow select{min-width:0;width:100%}
 </style>
 </head>
