@@ -121,12 +121,12 @@
       const explained = (k.length - d) / Math.max(q.length, k.length);
       const rank = explained + score * 0.5 - (span > k.length * 1.4 ? 0.05 : 0);
       const name = this.names[this.owner[ki]];
-      if (!best || rank > best.rank) { if (best && best.name !== name) second = best; best = { name, score, rank, exact: d === 0, explained }; }
+      if (!best || rank > best.rank) { if (best && best.name !== name) second = best; best = { name, score, rank, exact: d === 0, explained, start }; }
       else if (name !== best.name && (!second || rank > second.rank)) second = { name, score, rank };
     }
     // A forgiving match only counts when it's clearly the best candidate and explains most of the line.
     if (best && relaxed && best.score < 0.78 && (q.length > key(best.name).length * 1.5 || (second && best.rank - second.rank < 0.1))) return null;
-    return best ? { name: best.name, score: best.score, exact: best.exact } : null;
+    return best ? { name: best.name, score: best.score, exact: best.exact, start: best.start } : null;
   };
 
   // A cut-off name ("Swordsman, Sha…"): accept it when exactly one card name starts that way.
@@ -250,6 +250,21 @@
     if (/[a-z]{3,}[.:;]/.test(t)) return true;
     return (t.match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !SMALL.test(w)).length >= 3;
   }
+  // True when an imperfect match starts inside a word of the line ("Rapier Wit" read inside "Grap le with").
+  // The skipped part only counts if it holds real letters (not "|" or "!" read from a frame edge).
+  function startsMidWord(line, m) {
+    if (!m || m.exact || m.score >= 0.95 || !m.start) return false;
+    let acc = 0;
+    for (const tok of String(line).split(/\s+/)) {
+      const k = key(tok); if (!k) continue;
+      if (m.start > acc && m.start < acc + k.length) {
+        const before = tok.normalize("NFKD").replace(/[^A-Za-z0-9|!]/g, "").slice(0, m.start - acc);
+        return /[A-Za-z]/.test(before.replace(/^[|!lI1]+/, ""));
+      }
+      acc += k.length;
+    }
+    return false;
+  }
   function usableBarLine(l) { return !!l && !TYPE_LINE.test(l) && !TYPE_ANYWHERE.test(l) && !looksLikeSentence(l, true); }
 
   // Does a line start like a type line? (used to check which row of a grid was found; a few real names such as
@@ -260,7 +275,7 @@
     return TYPE_LINE.test(l.trim()) || TYPE_ANYWHERE.test(l) ||
       /^(?:(?:Legendary|Basic|Snow|World|Kindred|Tribal)\s+)*(?:Artifact|Enchantment|Creature|Land|Planeswalker|Instant|Sorcery|Battle)\b/i.test(t);
   }
-  const api = { Matcher, key, fitDistance, countFromReadings, usableBarLine, clearlyNotName, isTypeLine };
+  const api = { Matcher, key, fitDistance, countFromReadings, usableBarLine, clearlyNotName, isTypeLine, startsMidWord };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CardMatcher = api;
 })(typeof self !== "undefined" ? self : this);
