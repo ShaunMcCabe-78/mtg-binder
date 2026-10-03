@@ -211,7 +211,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   <div class="banner" id="installBanner" hidden><span class="small" id="installText">Install: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Binder from your Home Screen.</span><button class="primary" id="btnInstall" hidden>Install</button><button class="ghost" id="btnHideInstall" aria-label="Hide">✕</button></div>
 
   <!-- SCAN -->
-  <section class="pane" id="pane-scan">
+  <section class="pane" id="pane-scan" hidden>
     <div class="stack">
       <h2>Add cards from photos</h2>
       <p class="muted">Lay out your cards, take a photo, and the names are read and checked against every Magic card on your phone. You confirm the list before anything is added.</p>
@@ -307,7 +307,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   </section>
 
   <!-- COLLECTION -->
-  <section class="pane" id="pane-coll" hidden>
+  <section class="pane" id="pane-coll">
     <div class="stack">
       <div class="row" style="justify-content:space-between">
         <h2>Your collections</h2>
@@ -448,8 +448,8 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 </div>
 
 <nav class="tabs" role="tablist">
-  <button role="tab" aria-selected="true" data-tab="scan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span class="lbl">Scan</span></button>
-  <button role="tab" aria-selected="false" data-tab="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="10" height="14" rx="1.5"/><path d="M17 7h1.5A1.5 1.5 0 0 1 20 8.5v10a1.5 1.5 0 0 1-1.5 1.5H10"/></svg><span class="lbl">Collection</span></button>
+  <button role="tab" aria-selected="false" data-tab="scan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span class="lbl">Scan</span></button>
+  <button role="tab" aria-selected="true" data-tab="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="10" height="14" rx="1.5"/><path d="M17 7h1.5A1.5 1.5 0 0 1 20 8.5v10a1.5 1.5 0 0 1-1.5 1.5H10"/></svg><span class="lbl">Collection</span></button>
   <button role="tab" aria-selected="false" data-tab="deck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="3" width="12" height="17" rx="1.5"/><path d="M3.5 6.5v13M20.5 6.5v13"/></svg><span class="lbl">Deck</span></button>
   <button role="tab" aria-selected="false" data-tab="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span class="lbl">Settings</span></button>
 </nav>

@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.10.2";
+const APP_VERSION = "1.10.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -1269,5 +1269,6 @@ S.engine = lsGet("mtg.engine", "claude");
 S.scanMode = lsGet("mtg.scanMode", "stacked") === "grid" ? "grid" : "stacked"; renderScanMode();
 renderHeader(); renderSaved(); renderEngine();
 if (!totals().n) $("#layoutTips").open = true;
+showTab("coll");   // the app opens on the Collection tab
 loadDB();
 })();
