@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.8.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -139,6 +139,89 @@ function tidySets(c) {
 function addSets(c, sets) { if (!sets) return; c.sets = c.sets || {}; for (const [k, n] of Object.entries(sets)) c.sets[k] = (c.sets[k] || 0) + n; tidySets(c); }
 const setChips = sets => sets ? Object.entries(sets).map(([k, n]) => `<span class="badge set">${esc(printLabel(k))}${n > 1 ? " ×" + n : ""}</span>`).join("") : "";
 
+/* ---------- prices: Cardmarket euro prices via Scryfall (updated once a day) ----------
+   Kept on the phone so they show offline. Price ids: "SOS:178" (a printing), "SOA:|Zombify" (set known, number not),
+   "|Zombify" (no set: Scryfall's usual printing of the card). Each holds [euro, foil euro], null where Scryfall has none. */
+let PRICES = lsGet("mtg.prices", null) || { at: 0, p: {} };
+const DAY = 24 * 3600 * 1000;
+const fmtEur = v => { try { return new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(v); } catch (e) { return "€" + v.toFixed(2); } };
+function priceId(name, key) {
+  if (!key) return "|" + name;
+  const [code, num] = key.split(":"); return num ? code + ":" + num : code + ":|" + name;
+}
+// One copy's price: its printing's, or the card's usual price when the printing has none. approx: not the exact printing.
+function copyPrice(name, key) {
+  if (key) { const v = PRICES.p[priceId(name, key)]; if (v && v[0] != null) return { v: v[0], approx: !key.split(":")[1] }; }
+  const g = PRICES.p[priceId(name)]; return g && g[0] != null ? { v: g[0], approx: !!key } : null;
+}
+// Value of a collection entry (all its copies). missing: copies without a price.
+function entryValue(c) {
+  if (BASIC_SET.has(keyOf(c.name))) return { v: 0, missing: 0, approx: false };   // basic lands: not priced
+  let v = 0, missing = 0, approx = false, rest = c.qty;
+  for (const [key, n] of Object.entries(c.sets || {})) { const p = copyPrice(c.name, key); if (p) { v += p.v * n; approx = approx || p.approx; } else missing += n; rest -= n; }
+  if (rest > 0) { const p = copyPrice(c.name); if (p) v += p.v * rest; else missing += rest; }
+  return { v, missing, approx };
+}
+function valueOf(cards) { let v = 0, missing = 0; for (const c of cards) { const e = entryValue(c); v += e.v; missing += e.missing; } return { v, missing }; }
+const priceHTML = e => e && e.v > 0 ? `<span class="price">${fmtEur(e.v)}</span>` : "";
+
+let pricesBusy = null;
+// Fetch prices for every card owned. all: refresh everything (else only cards without a price yet).
+function updatePrices(all, extra) {
+  if (pricesBusy) return pricesBusy.then(() => updatePrices(all, extra));
+  if (!navigator.onLine) return Promise.resolve(false);
+  const ids = new Set();
+  for (const id of S.order) for (const c of Object.values(S.cols[id].cards)) {
+    if (BASIC_SET.has(keyOf(c.name))) continue;
+    ids.add(priceId(c.name)); for (const key of Object.keys(c.sets || {})) ids.add(priceId(c.name, key));
+  }
+  for (const id of extra || []) ids.add(id);
+  const todo = [...ids].filter(id => all || !(id in PRICES.p));
+  if (!todo.length) return Promise.resolve(false);
+  const ident = id => {
+    const bar = id.indexOf("|");
+    if (bar < 0) { const [code, num] = id.split(":"); return { set: code.toLowerCase(), collector_number: num }; }
+    const name = id.slice(bar + 1), code = id.slice(0, bar).replace(":", "");
+    return code ? { name, set: code.toLowerCase() } : { name };
+  };
+  const num = x => x == null || x === "" ? null : +x;
+  pricesBusy = (async () => {
+    let got = 0;
+    for (let i = 0; i < todo.length; i += 75) {
+      const chunk = todo.slice(i, i + 75);
+      try {
+        const r = await fetch("https://api.scryfall.com/cards/collection", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ identifiers: chunk.map(ident) }) });
+        if (!r.ok) continue;
+        const data = (await r.json()).data || [];
+        for (const id of chunk) {
+          const q = ident(id), nk = q.name && keyOf(q.name);
+          const card = data.find(c => q.collector_number ? c.set === q.set && c.collector_number === q.collector_number
+            : (keyOf(c.name) === nk || (c.card_faces || []).some(f => keyOf(f.name) === nk)) && (!q.set || c.set === q.set));
+          const pr = card && card.prices || {};
+          PRICES.p[id] = [num(pr.eur), num(pr.eur_foil)];
+          if (card) got++;
+        }
+      } catch (e) { break; }
+      await new Promise(res => setTimeout(res, 120));   // Scryfall asks for a short pause between requests
+    }
+    if (got && (all || !PRICES.at)) PRICES.at = Date.now();
+    lsSet("mtg.prices", PRICES);
+    return got > 0;
+  })().finally(() => { pricesBusy = null; });
+  return pricesBusy;
+}
+// Prices older than a day get refreshed when the collection is opened (online only).
+function refreshPricesSoon() {
+  const stale = Date.now() - PRICES.at > DAY;
+  updatePrices(stale).then(changed => { if (changed) { if (!$("#pane-coll").hidden) renderColl(); if (!$("#pane-deck").hidden) renderDeck(); if (!$("#pane-set").hidden) renderPriceInfo(); } });
+}
+function renderPriceInfo() {
+  const el = $("#priceStatus"); if (!el) return;
+  const all = []; for (const id of S.order) all.push(...Object.values(S.cols[id].cards));
+  const t = valueOf(all);
+  el.textContent = PRICES.at ? `All collections ≈ ${fmtEur(t.v)}${t.missing ? ` (${t.missing} card${t.missing === 1 ? "" : "s"} without a price)` : ""}. Prices from ${new Date(PRICES.at).toLocaleDateString()}.` : "No prices yet. They load when you're online.";
+}
+
 /* ---------- helpers ---------- */
 function costHTML(cost) {
   if (!cost) return "";
@@ -196,6 +279,7 @@ function addToCollection(items, colId) {
   }
   persist(); renderHeader(); renderColSelects();
   fetchMissingDetails(items.map(i => i.name));
+  updatePrices(false);
 }
 // Look up cards that aren't in the downloaded list (brand-new sets) on Scryfall, when online.
 async function fetchMissingDetails(names) {
@@ -462,7 +546,9 @@ $("#collSort").onchange = () => renderColl();
 function renderColl() {
   renderColSelects();
   const body = $("#collBody"); const view = S.view; const all = Object.entries(merged(view));
-  const t = totals(view); $("#collSummary").textContent = `${t.n} cards · ${t.u} unique`;
+  const t = totals(view); const val = valueOf(Object.values(merged(view)));
+  $("#collSummary").textContent = `${t.n} cards · ${t.u} unique` + (val.v > 0 ? ` · ≈ ${fmtEur(val.v)}` : "");
+  refreshPricesSoon();
   renderManage();
   if (!all.length) {
     body.innerHTML = view === "all" && !totals().n ? `<div class="empty"><h2>No cards yet</h2>
@@ -474,12 +560,13 @@ function renderColl() {
   const q = keyOf($("#collSearch").value); const sort = $("#collSort").value;
   let rows = all.filter(([k, c]) => { const ci = info(c.name) || {}; return (!q || k.includes(q) || (ci.t || "").toLowerCase().includes(q) || (ci.o || "").toLowerCase().includes(q)) && (!S.filter.size || S.filter.has(colorBucket(c.name))); });
   const mv = c => (info(c.name) || {}).v || 0;
-  rows.sort((a, b) => sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
+  const val1 = c => entryValue(c).v;
+  rows.sort((a, b) => sort === "value" ? (val1(b[1]) - val1(a[1])) || a[0].localeCompare(b[0]) : sort === "cmc" ? (mv(a[1]) - mv(b[1])) || a[0].localeCompare(b[0]) : sort === "qty" ? (b[1].qty - a[1].qty) || a[0].localeCompare(b[0]) : sort === "added" ? (b[1].added || 0) - (a[1].added || 0) : a[0].localeCompare(b[0]));
   const single = view !== "all";
   body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); return `
     <div class="crow">
       <button class="nm" data-open="${esc(k)}">${esc(c.name)}</button>
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${priceHTML(entryValue(c))}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
       ${single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
         : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
     </div>`; }).join("")}</div>` : `<p class="muted">No cards match.</p>`;
@@ -560,12 +647,20 @@ function openCard(k) {
     return `<option value="">Set not recorded</option>` + keys.map(key => `<option value="${esc(key)}"${key === cur ? " selected" : ""}>${esc(printLabel(key, true))}${key.endsWith(":") ? " (number unknown)" : ""}</option>`).join("");
   };
   const whereHTML = () => S.order.map(id => `<div class="wrow"><span>${esc(S.cols[id].name)}</span><div class="stepper"><button data-wdec="${id}" aria-label="Fewer in ${esc(S.cols[id].name)}">−</button><span>${qty[id]}</span><button data-winc="${id}" aria-label="More in ${esc(S.cols[id].name)}">+</button></div></div>` +
-    (qty[id] ? `<div class="sets">${copies[id].map((key, i) => `<label class="setrow"><span class="small muted">${qty[id] > 1 ? "Copy " + (i + 1) : "Set"}</span><select data-scol="${id}" data-si="${i}" aria-label="Set of copy ${i + 1} in ${esc(S.cols[id].name)}">${setOpts(key)}</select></label>`).join("")}</div>` : "")).join("");
+    (qty[id] ? `<div class="sets">${copies[id].map((key, i) => { const p = copyPrice(c.name, key);
+      return `<label class="setrow"><span class="small muted">${qty[id] > 1 ? "Copy " + (i + 1) : "Set"}</span><select data-scol="${id}" data-si="${i}" aria-label="Set of copy ${i + 1} in ${esc(S.cols[id].name)}">${setOpts(key)}</select><span class="price">${p ? (p.approx ? "≈" : "") + fmtEur(p.v) : "–"}</span></label>`; }).join("")}</div>` : "")).join("");
+  // Price line: the shown printing's price and foil price.
+  const priceLine = () => {
+    const key = firstSet(), v = PRICES.p[priceId(c.name, key)], g = PRICES.p[priceId(c.name)];
+    const pr = v && v[0] != null ? v : g; if (!pr || (pr[0] == null && pr[1] == null)) return pr || v ? "No price on Cardmarket" : navigator.onLine ? "Price loading…" : "No price saved yet";
+    return `Price${pr === v && key ? " (" + esc(printLabel(key)) + ")" : ""}: <b>${pr[0] != null ? fmtEur(pr[0]) : "–"}</b>${pr[1] != null ? ` · foil ${fmtEur(pr[1])}` : ""} <span class="muted">· Cardmarket via Scryfall${PRICES.at ? ", " + new Date(PRICES.at).toLocaleDateString() : ""}</span>`;
+  };
   const img = imgOf(firstSet());
   $("#sheet").innerHTML = `<div class="grab"></div>
     <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><h2 style="min-width:0">${esc(c.name)}</h2><button class="ghost" id="shClose" aria-label="Close">✕</button></div>
     <div class="cardimg" id="shImg">${navigator.onLine ? `<img src="${img}" alt="${esc(c.name)}" loading="lazy">` : "Picture needs internet"}</div>
     ${ci ? `<div class="stack" style="gap:6px"><div class="row">${costHTML(ci.c)}<span class="small muted">mana value ${ci.v}</span></div><b>${esc(ci.t)}${ci.p ? " · " + esc(ci.p) : ""}${ci.l ? " · loyalty " + esc(ci.l) : ""}</b>${ci.o ? `<p class="oracle">${esc(ci.o)}</p>` : ""}</div>` : `<p class="note">This name isn't in the card list. If it's misspelled, rename it below.</p>`}
+    <p class="small" id="shPrice">${priceLine()}</p>
     <div class="stack" style="gap:6px"><h3>Copies and sets</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another. Pick a set to record which printing a copy is.</p><button class="ghost small" id="shMorePrints" hidden>Look for more printings online</button></div>
     <label class="field">Rename / correct this card<input type="text" id="shName" value="${esc(c.name)}" autocomplete="off" autocapitalize="words"></label>
     <div class="sugg" id="shSugg"></div>
@@ -581,12 +676,15 @@ function openCard(k) {
   };
   showImg(firstSet());
   const morePrints = $("#shMorePrints");
-  const refreshSets = () => { $("#shWhere").innerHTML = whereHTML(); };
+  const refreshSets = () => { if (!$("#shWhere")) return; $("#shWhere").innerHTML = whereHTML(); $("#shPrice").innerHTML = priceLine(); };
+  // Fetch prices for the printings on screen that don't have one yet.
+  const loadSheetPrices = () => { const ids = [priceId(c.name)]; for (const id of S.order) for (const key of copies[id]) if (key) ids.push(priceId(c.name, key)); updatePrices(false, ids).then(ch => { if (ch) refreshSets(); }); };
+  loadSheetPrices();
   morePrints.hidden = !navigator.onLine;
   morePrints.onclick = async () => { morePrints.disabled = true; morePrints.textContent = "Looking…"; const got = await fetchPrintsOnline(c.name); refreshSets(); morePrints.textContent = got ? "More printings added" : "No more printings found"; };
   // The full printings list loads on first use.
   loadPrints().then(() => { if ($("#shWhere")) refreshSets(); if (!printsOf(c.name).length) fetchPrintsOnline(c.name).then(got => { if (got && $("#shWhere")) refreshSets(); }); });
-  $("#shWhere").onchange = e => { const t = e.target; if (t.dataset.scol == null) return; copies[t.dataset.scol][+t.dataset.si] = t.value; showImg(t.value || firstSet()); };
+  $("#shWhere").onchange = e => { const t = e.target; if (t.dataset.scol == null) return; copies[t.dataset.scol][+t.dataset.si] = t.value; showImg(t.value || firstSet()); refreshSets(); loadSheetPrices(); };
   $("#shClose").onclick = closeSheet;
   $("#shWhere").onclick = e => { const b = e.target.closest("button"); if (!b) return;
     if (b.dataset.winc) { qty[b.dataset.winc]++; copies[b.dataset.winc].push(""); }
@@ -762,6 +860,21 @@ function leftoverText(d, lo) {
   for (const g of lo.groups) for (const c of g.cards) out.push(`${c.qty} ${c.name}`);
   return out.join("\n");
 }
+// A deck's value: owned copies of each card, cheapest recorded printings first.
+function deckValueHTML(d) {
+  const own = merged(d.fromId && S.cols[d.fromId] ? d.fromId : "all");
+  let v = 0, missing = 0;
+  for (const c of d.cards) {
+    if (BASIC_SET.has(keyOf(c.name))) continue;
+    const o = own[keyOf(c.name)], prices = [];
+    for (const [key, n] of Object.entries((o && o.sets) || {})) { const p = copyPrice(c.name, key); for (let i = 0; i < n; i++) prices.push(p ? p.v : null); }
+    const g = copyPrice(c.name); while (prices.length < c.qty) prices.push(g ? g.v : null);
+    prices.sort((p, q) => (p ?? Infinity) - (q ?? Infinity));
+    for (const p of prices.slice(0, c.qty)) { if (p == null) missing++; else v += p; }
+  }
+  if (!v && !missing) return "";
+  return `<p class="small muted">Deck value ≈ <b>${fmtEur(v)}</b>${missing ? ` · ${missing} card${missing === 1 ? "" : "s"} without a price` : ""} · Cardmarket prices via Scryfall</p>`;
+}
 function renderDeck() {
   const d = S.deck; const out = $("#deckOut"); if (!d) { out.innerHTML = ""; return; }
   const groups = {}; d.cards.forEach(c => { const g = mainType(c.type); (groups[g] = groups[g] || []).push(c); });
@@ -773,6 +886,7 @@ function renderDeck() {
   let html = `<div class="panel">
     <div class="deckhead"><span class="arch">${esc(d.archetype)} · ${FORMATS[d.fmt].label}${d.builtBy ? " · by " + esc(d.builtBy) : ""}</span>${d.from ? `<span class="small muted">From: ${esc(d.from)}</span>` : ""}<label class="field" style="gap:4px"><span class="small muted">Deck name</span><input type="text" id="deckName" class="deckname" value="${esc(d.name)}" maxlength="60" autocomplete="off" autocapitalize="words" aria-label="Deck name"></label>${d.commander ? `<p><b>Commander:</b> ${esc(d.commander)}</p>` : ""}<p class="muted">${esc(d.summary)}</p></div>
     <div class="stats"><div class="stat"><b>${d.total}</b><span>cards</span></div><div class="stat"><b>${landCount}</b><span>lands</span></div><div class="stat"><b>${avg}</b><span>avg mana value</span></div></div>
+    ${deckValueHTML(d)}
     <div class="curve"><h3>Mana curve <span class="small">(${creatures} creatures)</span></h3>${curveSVG(d.cards)}</div>
     ${d.fixes && d.fixes.length ? `<ul class="tips" style="color:var(--warn)">${d.fixes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
   </div>`;
@@ -867,6 +981,7 @@ function renderSettings() {
   $("#keyStatus").className = "small " + (k ? "okmsg" : "muted");
   renderDbInfo();
   $("#appVersion").textContent = "Version " + APP_VERSION;
+  renderPriceInfo();
   checkOffline();
   if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(p => { $("#persistStatus").textContent = p ? "This phone has agreed to keep the app's data." : "Tip: opening the app from your Home Screen regularly keeps iOS from clearing its data."; });
 }
@@ -900,6 +1015,11 @@ $("#btnUpdateNames").onclick = async () => {
     $("#namesStatus").className = "small okmsg"; renderDbInfo();
   } catch (e) { $("#namesStatus").textContent = navigator.onLine ? "Scryfall couldn't be reached. Try again later." : "You're offline. Connect to the internet and try again."; $("#namesStatus").className = "small err"; }
   finally { b.disabled = false; }
+};
+$("#btnPrices").onclick = async () => {
+  const b = $("#btnPrices"); if (!navigator.onLine) { toast("Prices need internet"); return; }
+  b.disabled = true; b.textContent = "Updating…";
+  await updatePrices(true); b.disabled = false; b.textContent = "Update prices now"; renderPriceInfo(); toast("Prices updated");
 };
 $("#btnBackup").onclick = () => copyText(collText("all", true));
 $("#btnReset").onclick = () => $("#resetConfirm").hidden = false;

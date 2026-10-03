@@ -95,6 +95,7 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .badge.bad{color:var(--bad)}
 .badge.ex{color:var(--accent)}
 .badge.set{color:var(--muted);text-transform:none}
+.price{font-family:var(--mono);font-size:.8rem;font-variant-numeric:tabular-nums;color:var(--ink)}
 .cost{display:inline-flex;gap:2px;align-items:center}
 .pip{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-family:var(--mono);font-size:.68rem;font-weight:500;line-height:1;background:var(--pC);color:var(--pCi);flex:none}
 .pip.W{background:var(--pW);color:var(--pWi);box-shadow:inset 0 0 0 1px var(--line)}
@@ -157,7 +158,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 .where .wrow{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .where .wrow span{min-width:0;overflow-wrap:anywhere}
 .where .sets{display:flex;flex-direction:column;gap:6px;padding-left:10px;border-left:2px solid var(--line)}
-.where .setrow{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px}
+.where .setrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px}
 .where .setrow select{min-width:0;width:100%}
 </style>
 </head>
@@ -293,6 +294,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
           <option value="cmc">Sort by mana value</option>
           <option value="qty">Sort by copies</option>
           <option value="added">Recently added</option>
+          <option value="value">Sort by value</option>
         </select>
         <button class="ghost small" id="btnCopyColl">Copy list</button>
       </div>
@@ -363,6 +365,12 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
       <button id="btnUpdateNames">Check for new cards</button>
       <p class="small" id="namesStatus"></p>
       <p class="small muted">Adds names from new sets using Scryfall, so scans recognize them. Needs internet.</p>
+    </div>
+    <div class="panel">
+      <h3>Prices</h3>
+      <p class="small">Euro prices from Cardmarket, via Scryfall. They change once a day and are refreshed when you open your collection online; the last prices are kept for offline use. A copy with a recorded set gets that printing's price, otherwise the card's usual printing.</p>
+      <p class="small muted" id="priceStatus"></p>
+      <button id="btnPrices">Update prices now</button>
     </div>
     <div class="panel">
       <h3>Your data</h3>
