@@ -99,13 +99,14 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 #collBody .vals,#collBody .lhead{display:none}
 /* Landscape / wide screens: Each and Total columns */
 @media (orientation:landscape) and (min-width:560px){
-  #collBody .crow{grid-template-columns:minmax(0,1fr) 210px auto}
+  /* Fixed column widths so every row (and the header) lines up */
+  #collBody .crow{grid-template-columns:minmax(0,1fr) 210px 116px}
   #collBody .crow .vals{display:grid;grid-template-columns:1fr 1fr;gap:10px;grid-column:2;grid-row:1/span 2;text-align:right;font-family:var(--mono);font-size:.85rem;font-variant-numeric:tabular-nums}
-  #collBody .crow .ctl{grid-column:3}
+  #collBody .crow .ctl{grid-column:3;justify-self:end}
   #collBody .crow .price.inl{display:none}
   #collBody .lhead{display:grid;padding-top:6px;padding-bottom:6px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
   #collBody .lhead .vals{grid-row:1;font-family:inherit;font-size:inherit}
-  #collBody .lhead .ctl{grid-row:1;text-align:right}
+  #collBody .lhead .ctl{grid-row:1;justify-self:stretch;text-align:center}
 }
 .price{font-family:var(--mono);font-size:.8rem;font-variant-numeric:tabular-nums;color:var(--ink)}
 .cost{display:inline-flex;gap:2px;align-items:center}
