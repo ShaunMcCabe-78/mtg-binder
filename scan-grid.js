@@ -31,8 +31,10 @@
     const lastBar = Math.max(...good.map(b => b.y0));
     const cells = [];
     let Y = y0, first = null;
-    for (let row = 0; row < 12 && Y + barH <= H; row++) {
-      const found = cols.map(c => near(Y, c, pitch * 0.15));
+    const cardH = barW / BAR_OF_CARD * CARD_RATIO;
+    // A row only counts if at least half its card fits in the photo (strips near the bottom are copyright lines, not names).
+    for (let row = 0; row < 12 && Y + barH <= H && Y + cardH * 0.5 <= H; row++) {
+      const found = cols.map(c => near(Y, c, pitch * 0.1));
       const hits = found.filter(Boolean);
       if (!hits.length) { if (Y > lastBar) break; }
       else {
@@ -41,8 +43,9 @@
       }
       cols.forEach((c, col) => {
         const b = found[col];
-        cells.push(b ? { row, col, box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
-          : { row, col, box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
+        // rowY: where this row's bars usually are, in case this cell's bar was found a little off (an ornate frame, say).
+        cells.push(b ? { row, col, rowY: Y, box: { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, dark: b.dark }, predicted: false }
+          : { row, col, rowY: Y, box: { x0: c.x0, x1: c.x1, y0: Y, y1: Y + barH }, predicted: true });
       });
       Y += pitch;
     }
@@ -69,12 +72,17 @@
     }
     if (firstRow.length && typeLines * 2 >= firstRow.length) {
       const shift = grid.pitch * 0.505;
-      grid.cells = grid.cells.map(c => ({ ...c, predicted: true, box: { ...c.box, y0: c.box.y0 - shift, y1: c.box.y1 - shift } })).filter(c => c.box.y0 >= 0);
+      grid.cells = grid.cells.map(c => ({ ...c, predicted: true, rowY: c.rowY - shift, box: { ...c.box, y0: c.box.y0 - shift, y1: c.box.y1 - shift } })).filter(c => c.box.y0 >= 0);
       // A row of names may also exist below the last row of type lines found; it isn't needed: names sit above their type lines.
     }
 
-    const counts = new Map(), scores = new Map(), leftovers = [];
-    const add = m => { counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score)); };
+    const counts = new Map(), scores = new Map(), sets = new Map(), leftovers = [];
+    const add = (m, printing) => {
+      counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score));
+      if (printing) { const s = sets.get(m.name) || {}; s[printing.key] = (s[printing.key] || 0) + 1; sets.set(m.name, s); }
+    };
+    // Card size for reading the set: the median over the grid is steadier than any one name bar.
+    const unit = core.median(grid.cells.map(c => (c.box.x1 - c.box.x0) / 0.89 / 63));
     let n = 0;
     for (const cell of grid.cells) {
       ctx.check(); n++;
@@ -86,18 +94,39 @@
       }
       if (!match) {
         // Not detected, or didn't read as a name: look again, a little taller in case the position is slightly off.
-        const pad = cell.predicted ? grid.barH * 0.6 : 0;
-        const box = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, cell.box.y0 - pad), y1: Math.min(H, cell.box.y1 + pad), dark: cell.box.dark };
+        const pad = grid.barH * (cell.predicted ? 0.6 : 0.35);
+        const top = cell.rowY != null ? Math.min(cell.box.y0, cell.rowY) : cell.box.y0, bottom = cell.rowY != null ? Math.max(cell.box.y1, cell.rowY + grid.barH) : cell.box.y1;
+        const box = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, top - pad), y1: Math.min(H, bottom + pad), dark: cell.box.dark };
         const line = await core.closerLook(ctx, src, box);
         if (line) match = core.barMatch(ctx.matcher, line);
         if (!match && cell.predicted) { const r = await core.readBar(ctx, src, cell.box); match = r.match; seen = seen || r.a || r.b; }
+        // Its bar was found out of line with the row (an ornate frame above the name, say): read where the row's names are.
+        if (!match && cell.rowY != null && Math.abs(cell.box.y0 - cell.rowY) > grid.barH * 0.3) {
+          // Some frames put the name lower, under an ornament, so try a few heights around the row.
+          // Leave out the right side: the mana cost and frame ornaments there throw off the black-and-white cleanup.
+          const bh = grid.barH;
+          tries: for (const dy of [0, 0.4, 0.8, -0.3]) {
+            const rb = { x0: cell.box.x0, x1: cell.box.x1, y0: Math.max(0, cell.rowY + (dy - 0.15) * bh), y1: Math.min(H, cell.rowY + (dy + 1.25) * bh) };
+            for (const mode of ["otsu", "local"]) {
+              const t = await core.recognize(ctx, core.cropBar(src, rb, 0.4, mode, 80), 7);
+              match = core.barMatch(ctx.matcher, t);
+              if (match) break tries;
+            }
+          }
+        }
       }
-      if (match) add(match);
+      let printing = null;
+      if (match && root.ScanSet && ctx.printsOf) {
+        // The whole card shows in a grid, so the small print and set symbol can say which printing it is.
+        ctx.status(`reading card ${n} of ${grid.cells.length} (set)…`);
+        try { printing = await root.ScanSet.identify(ctx, src, cell.box, match.name, unit); } catch (e) { if (e && e.code === "cancelled") throw e; }
+      }
+      if (match) add(match, printing);
       else if (!cell.predicted && seen && !CardMatcher.clearlyNotName(seen)) leftovers.push(seen.split("\n")[0]);
     }
     const rows = Math.max(0, ...grid.cells.map(c => c.row)) + 1;
     // A single column with bars much closer together than a card height is really a stack.
-    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name) })), leftovers, grid: { rows, cols: grid.cols } };
+    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name), sets: sets.get(name) })), leftovers, grid: { rows, cols: grid.cols } };
     if (grid.cols === 1 && grid.stackLike) res.hint = "stacked";
     return res;
   }

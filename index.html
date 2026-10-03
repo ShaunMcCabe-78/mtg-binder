@@ -94,6 +94,7 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .badge.low{color:var(--warn)}
 .badge.bad{color:var(--bad)}
 .badge.ex{color:var(--accent)}
+.badge.set{color:var(--muted);text-transform:none}
 .cost{display:inline-flex;gap:2px;align-items:center}
 .pip{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-family:var(--mono);font-size:.68rem;font-weight:500;line-height:1;background:var(--pC);color:var(--pCi);flex:none}
 .pip.W{background:var(--pW);color:var(--pWi);box-shadow:inset 0 0 0 1px var(--line)}
@@ -155,6 +156,9 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 .where{display:flex;flex-direction:column;gap:6px}
 .where .wrow{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .where .wrow span{min-width:0;overflow-wrap:anywhere}
+.where .sets{display:flex;flex-direction:column;gap:6px;padding-left:10px;border-left:2px solid var(--line)}
+.where .setrow{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px}
+.where .setrow select{min-width:0;width:100%}
 </style>
 </head>
 <body>
@@ -395,6 +399,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 <script src="scan-core.js"></script>
 <script src="scan-stacked.js"></script>
 <script src="scan-grid.js"></script>
+<script src="scan-set.js"></script>
 <script src="builder.js"></script>
 <script src="app.js"></script>
 </body>

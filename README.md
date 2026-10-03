@@ -11,6 +11,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 
 ## What it does
 - **Scanning:** photograph a stack of overlapped cards so only the name bars show. The text is read on the phone (Tesseract) and each name is checked against a built-in list of every Magic card (`cards.json`). Portrait or landscape photos both work.
+- **Sets:** in Grid mode the whole card shows, so the app also reads which printing each card is from the small print at the bottom left (e.g. "U 0178 · SOS • EN"). If it can't tell, no set is recorded. In the card sheet you can set or change the printing of each copy; Stacked scans save cards without a set. The backup keeps sets as `2 Name (SOS) 178` lines.
 - **Collection:** stored only on your phone (browser storage). Back it up with *Settings → Copy collection backup*.
 - **Deck building:**
   - **With Claude:** uses your own Anthropic API key, saved on the phone, a few cents per deck.
@@ -28,13 +29,15 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `scan-core.js` | Shared scanning steps: text direction, bar finding, reading one bar |
 | `scan-stacked.js` | Stacked layout: overlapped cards in one column |
 | `scan-grid.js` | Grid layout: cards side by side; works out the grid and reads each card's name bar |
+| `scan-set.js` | Grid layout: reads which printing (set code and collector number) each card is |
 | `builder.js` | Built-in deckbuilder |
 | `cards.json` | Every card: name, cost, type, P/T, short rules text (built from the Forge project's card data) |
+| `prints.json` | Every card's printings (set code, collector number, rarity) and set names (built from the Forge project's set files; newer printings come from Scryfall when online) |
 | `eng.traineddata.gz` | English text-reading model for Tesseract |
 | `sw.js`, `manifest.webmanifest` | Offline support and Home Screen install |
 
 Magic: The Gathering is © Wizards of the Coast. This is an unofficial fan project.
 
 ## Planned
-- **Card set:** show which set each card comes from in the card sheet (and let the collection record the set/printing).
+- **Card set, older cards:** cards from before about 2014 have no set code printed, so their set can only be picked in the card sheet. Comparing the set symbol was tried, but at photo size the symbols are too alike to tell apart reliably.
 - **Binder pages:** a scan option for binder/folder pages with plastic pockets (building on Grid mode).

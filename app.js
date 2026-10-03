@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.6.4";
+const APP_VERSION = "1.7.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -42,7 +42,8 @@ function merged(scope) {
   for (const id of scope === "all" ? S.order : [scope]) {
     const col = S.cols[id]; if (!col) continue;
     for (const [k, c] of Object.entries(col.cards)) {
-      const m = out[k] || (out[k] = { name: c.name, qty: 0, added: 0, where: {} });
+      const m = out[k] || (out[k] = { name: c.name, qty: 0, added: 0, where: {}, sets: {} });
+      for (const [sk, n] of Object.entries(c.sets || {})) m.sets[sk] = (m.sets[sk] || 0) + n;
       m.qty += c.qty; m.added = Math.max(m.added, c.added || 0); m.where[id] = c.qty;
     }
   }
@@ -86,6 +87,57 @@ async function loadDB() {
     $("#dbStatus").innerHTML = `<span class="err">The card list couldn't load. Check your connection and reopen the app.</span>`;
   }
 }
+
+/* ---------- printings (which set a copy is from) ----------
+   A saved card keeps its total count in qty, plus sets: { "SOS:178": 2, "SOA:": 1 } for copies whose printing is known
+   ("SOA:" = set known, number not). Copies not listed in sets have no set recorded. */
+let PRINTS = null, printsP = null;
+let extraPrints = lsGet("mtg.extraPrints", {}), extraSets = lsGet("mtg.extraSets", {});
+function loadPrints() {
+  return printsP || (printsP = fetch("prints.json").then(r => { if (!r.ok) throw 0; return r.json(); }).then(j => (PRINTS = j)).catch(() => { printsP = null; return null; }));
+}
+function printsOf(name) {
+  const out = [], raw = PRINTS && PRINTS.p[name];
+  if (raw) for (const p of raw.split("|")) { const [code, num, rar] = p.split(":"); out.push({ code, num, rar }); }
+  for (const p of extraPrints[name] || []) if (!out.some(o => o.code === p.code && o.num === p.num)) out.push(p);
+  return out;
+}
+const setInfo = code => (PRINTS && PRINTS.s[code]) || extraSets[code] || null;
+function printLabel(key, long) {
+  const [code, num] = key.split(":"); const si = setInfo(code);
+  return `${code}${num ? " #" + num : ""}` + (long && si ? ` · ${si[0]}${si[1] ? " (" + si[1].slice(0, 4) + ")" : ""}` : "");
+}
+// More printings from Scryfall (newer than the downloaded list), when online. Kept on the phone.
+const printsFetched = new Set();
+async function fetchPrintsOnline(name) {
+  if (!navigator.onLine || printsFetched.has(name)) return false;
+  printsFetched.add(name);
+  try {
+    const r = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent('!"' + name + '"')}&unique=prints&order=released&dir=desc`, { headers: { Accept: "application/json" } });
+    if (!r.ok) return false;
+    const j = await r.json(), have = printsOf(name), add = [];
+    for (const c of j.data || []) {
+      if (c.digital) continue;
+      const code = String(c.set).toUpperCase(), num = String(c.collector_number);
+      if (!setInfo(code)) extraSets[code] = [c.set_name, c.released_at || ""];
+      if (!have.some(p => p.code === code && p.num === num)) add.push({ code, num, rar: (c.rarity || "")[0].toUpperCase() });
+    }
+    if (!add.length) return false;
+    extraPrints[name] = (extraPrints[name] || []).concat(add);
+    lsSet("mtg.extraPrints", extraPrints); lsSet("mtg.extraSets", extraSets);
+    return true;
+  } catch (e) { return false; }
+}
+// Keep a card's set counts within its total.
+function tidySets(c) {
+  if (!c.sets) return c;
+  let room = c.qty;
+  for (const k of Object.keys(c.sets)) { const n = Math.min(c.sets[k] | 0, room); if (n > 0) { c.sets[k] = n; room -= n; } else delete c.sets[k]; }
+  if (!Object.keys(c.sets).length) delete c.sets;
+  return c;
+}
+function addSets(c, sets) { if (!sets) return; c.sets = c.sets || {}; for (const [k, n] of Object.entries(sets)) c.sets[k] = (c.sets[k] || 0) + n; tidySets(c); }
+const setChips = sets => sets ? Object.entries(sets).map(([k, n]) => `<span class="badge set">${esc(printLabel(k))}${n > 1 ? " ×" + n : ""}</span>`).join("") : "";
 
 /* ---------- helpers ---------- */
 function costHTML(cost) {
@@ -139,6 +191,7 @@ function addToCollection(items, colId) {
     const cards = S.cols[id].cards; const k = keyOf(name);
     if (cards[k]) { cards[k].qty += c.qty; cards[k].added = at; }
     else cards[k] = { name, qty: c.qty, added: at };
+    addSets(cards[k], c.sets);
     byCol[id] = (byCol[id] || 0) + c.qty;
   }
   persist(); renderHeader(); renderColSelects();
@@ -225,11 +278,14 @@ $("#btnIdentify").onclick = async () => {
     try { worker = await getOcr(); } catch (e) { throw { code: "ocr_load", message: String(e && e.message || e) }; }
     try { await worker.setParameters({ tessedit_pageseg_mode: "11" }); } catch (e) {}
     const scanner = S.scanMode === "grid" ? ScanGrid : ScanStacked;
+    // Grid photos show whole cards, so the set can be read too.
+    if (S.scanMode === "grid") { st.textContent = "Loading the set list…"; await loadPrints(); }
     for (let i = 0; i < S.photos.length; i++) {
       const lbl = S.photos.length > 1 ? `Photo ${i + 1} of ${S.photos.length}` : (S.scanMode === "grid" ? "Grid" : "Stack");
       // Everything a scanner needs: the reader, the card list, and a way to report progress or stop.
       const ctx = {
         worker, matcher, psm: 11,
+        printsOf: PRINTS ? printsOf : null,
         check: () => { if (ocrStop) throw { code: "cancelled" }; },
         status: t => { st.textContent = `${lbl}: ${t}`; },
         progress: p => { st.textContent = `${lbl}: checking the whole photo… ${Math.round(p * 100)}%`; }
@@ -243,10 +299,14 @@ $("#btnIdentify").onclick = async () => {
       const res = await scanner.scan(ctx, upright);
       if (res.grid && !res.hint) notes.push(`${S.photos.length > 1 ? `Photo ${i + 1}: ` : ""}found a grid of ${res.grid.rows} × ${res.grid.cols}.`);
       if (res.hint) hint = res.hint;
-      for (const c of res.cards) { const f = found.get(c.name); if (f) { f.qty += c.qty; f.score = Math.min(f.score, c.score); } else found.set(c.name, { name: c.name, qty: c.qty, score: c.score }); }
+      for (const c of res.cards) {
+        let f = found.get(c.name);
+        if (f) { f.qty += c.qty; f.score = Math.min(f.score, c.score); } else found.set(c.name, f = { name: c.name, qty: c.qty, score: c.score });
+        addSets(f, c.sets);
+      }
       res.leftovers.forEach(l => leftovers.add(l));
     }
-    S.review = [...found.values()].map(c => ({ name: c.name, qty: c.qty, low: c.score < 0.95 }));
+    S.review = [...found.values()].map(c => ({ name: c.name, qty: c.qty, low: c.score < 0.95, sets: c.sets }));
     S.leftovers = [...leftovers];
     $("#scanNote").textContent = notes.join(" "); $("#scanNote").hidden = !notes.length;
     // The photo looks like the other layout: offer to scan it again that way.
@@ -285,7 +345,7 @@ function renderReview(scroll) {
     const ci = info(c.name);
     return `<div class="crow rv">
       <input class="nm-edit" type="text" id="rv-${i}" data-i="${i}" value="${esc(c.name)}" aria-label="Card name" autocomplete="off">
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : ""}${setChips(c.sets)}${!known ? '<span class="badge bad">unknown</span>' : c.low ? '<span class="badge low">check</span>' : ""}${c.col && c.col !== S.target ? `<span class="badge ex">→ ${esc(colName(c.col))}</span>` : ""}<button class="ghost small" data-rm="${i}">Remove</button></div>
       <div class="ctl stepper"><button data-dec="${i}" aria-label="Fewer">−</button><span>${c.qty}</span><button data-inc="${i}" aria-label="More">+</button></div>
       ${sug.length ? `<div class="sugg"><span class="small muted">Did you mean</span>${sug.map(s => `<button data-fix="${i}" data-name="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : ""}
     </div>`;
@@ -301,16 +361,16 @@ function renderReview(scroll) {
 let reviewEditTimer = null;
 $("#reviewList").addEventListener("input", e => {
   const i = e.target.dataset.i; if (i == null) return;
-  S.review[i].name = e.target.value; S.review[i].low = false;
+  S.review[i].name = e.target.value; S.review[i].low = false; delete S.review[i].sets;
   clearTimeout(reviewEditTimer);
   reviewEditTimer = setTimeout(() => { const pos = e.target.selectionStart; renderReview(); const el = $("#rv-" + i); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} } }, 700);
 });
 $("#reviewList").addEventListener("click", e => {
   const t = e.target.closest("button"); if (!t) return;
   if (t.dataset.inc != null) S.review[t.dataset.inc].qty++;
-  else if (t.dataset.dec != null) { const c = S.review[t.dataset.dec]; c.qty = Math.max(1, c.qty - 1); }
+  else if (t.dataset.dec != null) { const c = S.review[t.dataset.dec]; c.qty = Math.max(1, c.qty - 1); tidySets(c); }
   else if (t.dataset.rm != null) S.review.splice(+t.dataset.rm, 1);
-  else if (t.dataset.fix != null) { S.review[t.dataset.fix].name = t.dataset.name; S.review[t.dataset.fix].low = false; }
+  else if (t.dataset.fix != null) { S.review[t.dataset.fix].name = t.dataset.name; S.review[t.dataset.fix].low = false; delete S.review[t.dataset.fix].sets; }
   else return;
   renderReview();
 });
@@ -323,7 +383,7 @@ $("#leftList").addEventListener("click", e => {
 });
 $("#btnDiscard").onclick = () => { S.review = []; S.leftovers = []; renderReview(); };
 $("#btnAddReviewed").onclick = () => {
-  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col }));
+  const items = S.review.filter(c => c.name.trim()).map(c => ({ name: (matcher && matcher.canonical(c.name)) || c.name.trim(), qty: c.qty, col: c.col, sets: c.sets }));
   if (!items.length) return;
   addToCollection(items, S.target);
   const multi = items.some(i => i.col && i.col !== S.target);
@@ -369,13 +429,16 @@ $("#btnPasteAdd").onclick = () => {
     if (!line || line.startsWith("#") || /^(deck|sideboard|commander|companion|maybeboard|about|name .*)$/i.test(line)) continue;
     const m = line.match(/^(\d+)\s*x?\s+(.+)$/i);
     let qty = 1, name = line; if (m) { qty = parseInt(m[1], 10) || 1; name = m[2]; }
-    name = name.replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\([A-Z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
+    // "Name (SOS) 178" keeps the printing.
+    const pm = name.match(/\s*\(([A-Za-z0-9]{2,6})\)\s*([^\s*]*)\s*(\*F\*)?$/);
+    const sets = pm ? { [pm[1].toUpperCase() + ":" + (pm[2] || "")]: qty } : undefined;
+    name = name.replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\([A-Za-z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
     if (!name) continue;
     const can = matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name);
-    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined });
+    items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined, sets });
   }
   if (!items.length) return;
-  for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) ex.qty += it.qty; else S.review.push(it); }
+  for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) { ex.qty += it.qty; addSets(ex, it.sets); } else S.review.push(it); }
   $("#pasteList").value = "";
   renderReview(true);
 };
@@ -416,7 +479,7 @@ function renderColl() {
   body.innerHTML = rows.length ? `<div class="list">${rows.map(([k, c]) => { const ci = info(c.name); const ids = Object.keys(c.where); return `
     <div class="crow">
       <button class="nm" data-open="${esc(k)}">${esc(c.name)}</button>
-      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${setChips(Object.keys(c.sets || {}).length ? c.sets : null)}${!single && S.order.length > 1 ? `<span>· ${ids.map(id => esc(colName(id))).join(", ")}</span>` : ""}</div>
       ${single ? `<div class="ctl stepper"><button data-cdec="${esc(k)}" aria-label="Fewer ${esc(c.name)}">−</button><span>${c.qty}</span><button data-cinc="${esc(k)}" aria-label="More ${esc(c.name)}">+</button></div>`
         : `<div class="ctl"><span class="badge" style="font-size:.85rem">×${c.qty}</span></div>`}
     </div>`; }).join("")}</div>` : `<p class="muted">No cards match.</p>`;
@@ -425,13 +488,21 @@ $("#collBody").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.open) { openCard(b.dataset.open); return; }
   const k = b.dataset.cinc ?? b.dataset.cdec; const col = S.cols[S.view]; if (k == null || !col || !col.cards[k]) return;
-  if (b.dataset.cinc != null) col.cards[k].qty++; else { col.cards[k].qty--; if (col.cards[k].qty <= 0) delete col.cards[k]; }
+  if (b.dataset.cinc != null) col.cards[k].qty++; else { col.cards[k].qty--; if (col.cards[k].qty <= 0) delete col.cards[k]; else tidySets(col.cards[k]); }
   persist(); renderHeader(); renderColl();
 });
 // Text backup: one "# Collection:" header per collection, so pasting it back recreates them.
-function collText(scope) {
+// withSets: copies with a known printing get their own "2 Name (SOS) 178" line (the usual deck-list style), so a restore keeps them.
+function collText(scope, withSets) {
+  const lines = c => {
+    if (!withSets || !c.sets) return [`${c.qty} ${c.name}`];
+    const out = []; let rest = c.qty;
+    for (const [key, n] of Object.entries(c.sets)) { const [code, num] = key.split(":"); out.push(`${n} ${c.name} (${code})${num ? " " + num : ""}`); rest -= n; }
+    if (rest > 0) out.unshift(`${rest} ${c.name}`);
+    return out;
+  };
   return (scope === "all" ? S.order : [scope]).filter(id => Object.keys(S.cols[id].cards).length).map(id =>
-    `# Collection: ${S.cols[id].name}\n` + Object.values(S.cols[id].cards).sort((a, b) => a.name.localeCompare(b.name)).map(c => `${c.qty} ${c.name}`).join("\n")).join("\n\n");
+    `# Collection: ${S.cols[id].name}\n` + Object.values(S.cols[id].cards).sort((a, b) => a.name.localeCompare(b.name)).flatMap(lines).join("\n")).join("\n\n");
 }
 $("#btnCopyColl").onclick = () => copyText(collText(S.view));
 
@@ -454,7 +525,7 @@ $("#newColName").addEventListener("keydown", e => { if (e.key === "Enter") $("#b
 $("#btnRenameCol").onclick = () => { const v = $("#renameCol").value.trim().slice(0, 40); if (!v || !S.cols[S.view]) return; S.cols[S.view].name = v; persist(); renderColl(); toast("Renamed"); };
 $("#btnMergeCol").onclick = () => {
   const from = S.cols[S.view], toId = $("#mergeSel").value, to = S.cols[toId]; if (!from || !to) return;
-  for (const [k, c] of Object.entries(from.cards)) { if (to.cards[k]) to.cards[k].qty += c.qty; else to.cards[k] = { ...c }; }
+  for (const [k, c] of Object.entries(from.cards)) { if (to.cards[k]) { to.cards[k].qty += c.qty; addSets(to.cards[k], c.sets); } else to.cards[k] = { ...c, sets: c.sets ? { ...c.sets } : undefined }; tidySets(to.cards[k]); }
   const n = colCount(S.view); from.cards = {}; persist(); toast(`Moved ${n} card${n === 1 ? "" : "s"} to ${to.name}`); renderColl();
 };
 $("#btnDeleteCol").onclick = () => { const n = colCount(S.view); $("#delColMsg").textContent = `Delete "${colName(S.view)}"` + (n ? ` and the ${n} card${n === 1 ? "" : "s"} in it? To keep the cards, move them into another collection first.` : "?"); $("#delColConfirm").hidden = false; };
@@ -469,24 +540,61 @@ $("#yesDelCol").onclick = () => {
 function openCard(k) {
   const c = merged("all")[k]; if (!c) return;
   const ci = info(c.name);
-  const img = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(c.name)}&format=image&version=normal`;
-  const qty = {}; for (const id of S.order) qty[id] = c.where[id] || 0;
-  const whereHTML = () => S.order.map(id => `<div class="wrow"><span>${esc(S.cols[id].name)}</span><div class="stepper"><button data-wdec="${id}" aria-label="Fewer in ${esc(S.cols[id].name)}">−</button><span>${qty[id]}</span><button data-winc="${id}" aria-label="More in ${esc(S.cols[id].name)}">+</button></div></div>`).join("");
+  const imgOf = key => {
+    const [code, num] = (key || "").split(":");
+    if (code && num) return `https://api.scryfall.com/cards/${encodeURIComponent(code.toLowerCase())}/${encodeURIComponent(num)}?format=image&version=normal`;
+    return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(c.name)}${code ? "&set=" + encodeURIComponent(code.toLowerCase()) : ""}&format=image&version=normal`;
+  };
+  const qty = {}, copies = {};
+  // One entry per copy: its printing ("SOS:178"), or "" when no set is recorded.
+  for (const id of S.order) {
+    const e = S.cols[id].cards[k]; qty[id] = e ? e.qty : 0; copies[id] = [];
+    for (const [sk, n] of Object.entries((e && e.sets) || {})) for (let i = 0; i < n; i++) copies[id].push(sk);
+    while (copies[id].length < qty[id]) copies[id].push("");
+    copies[id].length = qty[id];
+  }
+  const firstSet = () => { for (const id of S.order) { const x = copies[id].find(Boolean); if (x) return x; } return ""; };
+  const setOpts = cur => {
+    const list = printsOf(c.name), keys = list.map(p => p.code + ":" + p.num);
+    if (cur && !keys.includes(cur)) keys.unshift(cur);
+    return `<option value="">Set not recorded</option>` + keys.map(key => `<option value="${esc(key)}"${key === cur ? " selected" : ""}>${esc(printLabel(key, true))}${key.endsWith(":") ? " (number unknown)" : ""}</option>`).join("");
+  };
+  const whereHTML = () => S.order.map(id => `<div class="wrow"><span>${esc(S.cols[id].name)}</span><div class="stepper"><button data-wdec="${id}" aria-label="Fewer in ${esc(S.cols[id].name)}">−</button><span>${qty[id]}</span><button data-winc="${id}" aria-label="More in ${esc(S.cols[id].name)}">+</button></div></div>` +
+    (qty[id] ? `<div class="sets">${copies[id].map((key, i) => `<label class="setrow"><span class="small muted">${qty[id] > 1 ? "Copy " + (i + 1) : "Set"}</span><select data-scol="${id}" data-si="${i}" aria-label="Set of copy ${i + 1} in ${esc(S.cols[id].name)}">${setOpts(key)}</select></label>`).join("")}</div>` : "")).join("");
+  const img = imgOf(firstSet());
   $("#sheet").innerHTML = `<div class="grab"></div>
     <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><h2 style="min-width:0">${esc(c.name)}</h2><button class="ghost" id="shClose" aria-label="Close">✕</button></div>
     <div class="cardimg" id="shImg">${navigator.onLine ? `<img src="${img}" alt="${esc(c.name)}" loading="lazy">` : "Picture needs internet"}</div>
     ${ci ? `<div class="stack" style="gap:6px"><div class="row">${costHTML(ci.c)}<span class="small muted">mana value ${ci.v}</span></div><b>${esc(ci.t)}${ci.p ? " · " + esc(ci.p) : ""}${ci.l ? " · loyalty " + esc(ci.l) : ""}</b>${ci.o ? `<p class="oracle">${esc(ci.o)}</p>` : ""}</div>` : `<p class="note">This name isn't in the card list. If it's misspelled, rename it below.</p>`}
-    <div class="stack" style="gap:6px"><h3>Copies in each collection</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another.</p></div>
+    <div class="stack" style="gap:6px"><h3>Copies and sets</h3><div class="where" id="shWhere">${whereHTML()}</div><p class="small muted">To move a copy, take it out of one collection and add it to another. Pick a set to record which printing a copy is.</p><button class="ghost small" id="shMorePrints" hidden>Look for more printings online</button></div>
     <label class="field">Rename / correct this card<input type="text" id="shName" value="${esc(c.name)}" autocomplete="off" autocapitalize="words"></label>
     <div class="sugg" id="shSugg"></div>
     <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove everywhere</button></div>
     <div class="panel" id="shDelConfirm" hidden><p>Remove all ${c.qty} cop${c.qty === 1 ? "y" : "ies"} of ${esc(c.name)} from every collection?</p><div class="row"><button class="primary" id="shYes">Remove</button><button id="shNo">Keep</button></div></div>
     <a class="small" href="https://scryfall.com/search?q=${encodeURIComponent('!"' + c.name + '"')}" target="_blank" rel="noopener">Open on Scryfall</a>`;
   $("#sheetBg").hidden = false;
-  const im = $("#shImg img"); if (im) im.onerror = () => { $("#shImg").textContent = "No picture available"; };
+  const showImg = key => {
+    const box = $("#shImg"); if (!box || !navigator.onLine) return;
+    box.innerHTML = `<img src="${imgOf(key)}" alt="${esc(c.name)}" loading="lazy">`;
+    // A printing Scryfall doesn't know by number: fall back to the card's usual picture.
+    box.querySelector("img").onerror = function () { if (key) showImg(""); else box.textContent = "No picture available"; };
+  };
+  showImg(firstSet());
+  const morePrints = $("#shMorePrints");
+  const refreshSets = () => { $("#shWhere").innerHTML = whereHTML(); };
+  morePrints.hidden = !navigator.onLine;
+  morePrints.onclick = async () => { morePrints.disabled = true; morePrints.textContent = "Looking…"; const got = await fetchPrintsOnline(c.name); refreshSets(); morePrints.textContent = got ? "More printings added" : "No more printings found"; };
+  // The full printings list loads on first use.
+  loadPrints().then(() => { if ($("#shWhere")) refreshSets(); if (!printsOf(c.name).length) fetchPrintsOnline(c.name).then(got => { if (got && $("#shWhere")) refreshSets(); }); });
+  $("#shWhere").onchange = e => { const t = e.target; if (t.dataset.scol == null) return; copies[t.dataset.scol][+t.dataset.si] = t.value; showImg(t.value || firstSet()); };
   $("#shClose").onclick = closeSheet;
   $("#shWhere").onclick = e => { const b = e.target.closest("button"); if (!b) return;
-    if (b.dataset.winc) qty[b.dataset.winc]++; else if (b.dataset.wdec) qty[b.dataset.wdec] = Math.max(0, qty[b.dataset.wdec] - 1); else return;
+    if (b.dataset.winc) { qty[b.dataset.winc]++; copies[b.dataset.winc].push(""); }
+    else if (b.dataset.wdec) {
+      const id = b.dataset.wdec; if (!qty[id]) return; qty[id]--;
+      // Take away a copy without a set first.
+      const a = copies[id], i = a.lastIndexOf(""); a.splice(i >= 0 ? i : a.length - 1, 1);
+    } else return;
     $("#shWhere").innerHTML = whereHTML(); };
   $("#shName").oninput = () => { const v = $("#shName").value; $("#shSugg").innerHTML = matcher && v.trim().length >= 2 && !matcher.isCard(v) ? suggHTML(matcher.suggest(v, 5), "pick") : ""; };
   $("#shSugg").onclick = e => { const b = e.target.closest("button[data-pick]"); if (!b) return; $("#shName").value = b.dataset.pick; $("#shSugg").innerHTML = ""; };
@@ -496,8 +604,10 @@ function openCard(k) {
     for (const id of S.order) {
       const cards = S.cols[id].cards; const old = cards[k]; delete cards[k];
       const q = qty[id]; if (q <= 0) continue;
+      // Sets belong to this card: renaming to a different card drops them.
+      const sets = {}; if (nk === k) for (const key of copies[id]) if (key) sets[key] = (sets[key] || 0) + 1;
       if (nk !== k && cards[nk]) cards[nk].qty += q;
-      else cards[nk] = { name, qty: q, added: old ? old.added : Date.now() };
+      else { cards[nk] = { name, qty: q, added: old ? old.added : Date.now() }; if (Object.keys(sets).length) cards[nk].sets = sets; tidySets(cards[nk]); }
     }
     if (nk !== k) fetchMissingDetails([name]);
     persist(); renderHeader(); renderColl(); closeSheet(); toast("Saved");
@@ -791,7 +901,7 @@ $("#btnUpdateNames").onclick = async () => {
   } catch (e) { $("#namesStatus").textContent = navigator.onLine ? "Scryfall couldn't be reached. Try again later." : "You're offline. Connect to the internet and try again."; $("#namesStatus").className = "small err"; }
   finally { b.disabled = false; }
 };
-$("#btnBackup").onclick = () => copyText(collText("all"));
+$("#btnBackup").onclick = () => copyText(collText("all", true));
 $("#btnReset").onclick = () => $("#resetConfirm").hidden = false;
 $("#noReset").onclick = () => $("#resetConfirm").hidden = true;
 $("#yesReset").onclick = () => { ["mtg.cards", "mtg.cols", "mtg.target", "mtg.view", "mtg.buildFrom", "mtg.decks", "mtg.apiKey", "mtg.engine"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cols = { main: { name: "My collection", created: Date.now(), cards: {} } }; S.order = ["main"]; S.target = "main"; S.view = "all"; S.buildFrom = "all"; renderColSelects(); S.decks = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
