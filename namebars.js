@@ -62,13 +62,24 @@
         while (y1 < h && (dark[y1] || (gap < 1 && y1 + 1 < h && dark[y1 + 1]))) { gap = dark[y1] ? 0 : gap + 1; y1++; }
         const end = y1;
         // The name sits at the top of a dark area that continues into artwork, so keep just the top strip.
-        if (y1 - y > h * 0.09) y1 = y + Math.round(barH);
+        if (y1 - y > h * 0.09) y1 = y + Math.round(Math.min(barH, h * 0.09));
         const bh = y1 - y;
         if (bh >= h * 0.012 && bh <= h * 0.09 && cw / bh >= 5) {
-          let light = 0; for (let yy = y; yy < y1; yy++) for (let x = cx0; x < cx1; x++) if (g[yy * w + x] > 150) light++;
-          const f = light / (bh * cw);
-          // Rows through the tops of the letters are less dark, so the band starts a little low: extend it upwards.
-          if (f >= 0.02 && f <= 0.45) out.push({ x0: cx0, y0: Math.max(0, y - Math.round(bh * 0.5)), x1: cx1, y1: Math.min(h, y1 + Math.round(bh * 0.15)), a: bh * cw, dark: true });
+          // The name is where the light letters are: fit the box to those rows (plus a margin, since the very
+          // tops and bottoms of letters sit in rows that may not count as dark).
+          // Look for letters in the left three-quarters only (the mana cost and frame ornaments sit at the ends),
+          // and count a row as part of the name when it has a good share of the strongest row's light pixels.
+          const ix0 = cx0 + Math.round(cw * 0.04), ix1 = cx0 + Math.round(cw * 0.75), iw = ix1 - ix0;
+          const rowsLight = [];
+          for (let yy = y; yy < y1; yy++) { let l = 0; for (let x = ix0; x < ix1; x++) if (g[yy * w + x] > 150) l++; rowsLight.push(l); }
+          const peak = Math.max(...rowsLight), light = rowsLight.reduce((p, q) => p + q, 0);
+          let first = -1, last = -1;
+          rowsLight.forEach((l, i) => { if (l >= Math.max(iw * 0.03, peak * 0.3)) { if (first < 0) first = y + i; last = y + i; } });
+          const f = light / (bh * iw);
+          if (first >= 0 && f >= 0.02 && f <= 0.45) {
+            const th = last - first + 1, pad = Math.round(Math.max(th * 0.35, 2));
+            out.push({ x0: cx0, y0: Math.max(0, first - pad), x1: cx1, y1: Math.min(h, last + 1 + pad), a: th * cw, dark: true });
+          }
         }
         y = end - 1;
       }

@@ -1,6 +1,6 @@
 /* Offline support: keeps the app, card list and text reader on the phone.
    App files are re-downloaded on each version; the big data files live in their own cache and are kept across updates. */
-const VERSION = "binder-v1.6.1";
+const VERSION = "binder-v1.6.2";
 const DATA_CACHE = "binder-data-1";   // bump only when cards.json or the reader data changes
 const APP = ["./", "index.html", "app.js", "matcher.js", "namebars.js", "scan-core.js", "scan-stacked.js", "scan-grid.js", "builder.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
