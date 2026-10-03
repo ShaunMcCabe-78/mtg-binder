@@ -77,7 +77,7 @@
       // A row of names may also exist below the last row of type lines found; it isn't needed: names sit above their type lines.
     }
 
-    const counts = new Map(), scores = new Map(), sets = new Map(), leftovers = [];
+    const counts = new Map(), scores = new Map(), sets = new Map(), leftovers = [], missing = [];
     const add = (m, printing) => {
       counts.set(m.name, (counts.get(m.name) || 0) + 1); scores.set(m.name, Math.min(scores.has(m.name) ? scores.get(m.name) : 1, m.score));
       if (printing) { const s = sets.get(m.name) || {}; s[printing.key] = (s[printing.key] || 0) + 1; sets.set(m.name, s); }
@@ -130,9 +130,36 @@
           for (const t of texts) for (const line of String(t || "").split("\n")) {
             if (!CardMatcher.usableBarLine(line) || CardMatcher.isTypeLine(line)) continue;
             const m = ctx.matcher.matchLine(line, { relaxed: true });
-            if (m && m.score >= 0.7 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.score)) best = m;
+            if (m && m.score >= 0.8 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.score)) best = m;
           }
           if (best) { match = { ...best, score: Math.min(best.score, 0.9) }; guessed = true; }
+        }
+      }
+      // Every square of the grid should hold a card. Still nothing: one last look across the whole top of the card.
+      let thumb = null;
+      if (!match) {
+        ctx.status(`checking square ${cell.row + 1}, ${cell.col + 1} again…`);
+        const g = root.ScanSet.geom({ x0: cell.colX[0], x1: cell.colX[1], y0: cell.rowY, y1: cell.rowY + grid.barH }, unit), cw = 63 * g.u;
+        const top = { x0: Math.max(0, g.left), x1: Math.min(W, g.left + cw), y0: Math.max(0, g.top), y1: Math.min(H, g.top + 16 * g.u) };
+        const t = await core.recognize(ctx, core.cropBar(src, top, 0, "otsu", 160), 11);
+        texts.push(t);
+        for (const line of t.split("\n")) { match = core.barMatch(ctx.matcher, line); if (match) { match = { ...match, score: Math.min(match.score, 0.9) }; break; } }
+        // Closest card name as a guess (marked "check").
+        if (!match) {
+          let best = null;
+          for (const tx of texts) for (const line of String(tx || "").split("\n")) {
+            if (!CardMatcher.usableBarLine(line) || CardMatcher.isTypeLine(line)) continue;
+            const m = ctx.matcher.matchLine(line, { relaxed: true });
+            if (m && m.score >= 0.8 && CardMatcher.key(m.name).length >= 6 && (!best || m.score > best.score)) best = m;
+          }
+          if (best) { match = { ...best, score: Math.min(best.score, 0.9) }; guessed = true; }
+        }
+        // Still nothing: a small picture of the square, so it can be named by hand.
+        if (!match) {
+          const c = document.createElement("canvas"), w = 150, h = Math.round(w * 88 / 63); c.width = w; c.height = h;
+          const x = c.getContext("2d"); x.fillStyle = "#888"; x.fillRect(0, 0, w, h); x.imageSmoothingQuality = "high";
+          x.drawImage(src, g.left, g.top, cw, 88 * g.u, 0, 0, w, h);
+          try { thumb = c.toDataURL("image/jpeg", 0.75); } catch (e) {}
         }
       }
       let printing = null;
@@ -144,11 +171,11 @@
         if (guessed && printing && printing.how === "code" && /:\S/.test(printing.key)) match = { ...match, score: 0.95 };
       }
       if (match) add(match, printing);
-      else if (!cell.predicted && seen && !CardMatcher.clearlyNotName(seen)) leftovers.push(seen.split("\n")[0]);
+      else missing.push({ row: cell.row, col: cell.col, thumb, seen: !cell.predicted && seen && !CardMatcher.clearlyNotName(seen) ? seen.split("\n")[0] : "" });
     }
     const rows = Math.max(0, ...grid.cells.map(c => c.row)) + 1;
     // A single column with bars much closer together than a card height is really a stack.
-    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name), sets: sets.get(name) })), leftovers, grid: { rows, cols: grid.cols } };
+    const res = { cards: [...counts].map(([name, qty]) => ({ name, qty, score: scores.get(name), sets: sets.get(name) })), leftovers, missing, grid: { rows, cols: grid.cols, cells: grid.cells.length } };
     if (grid.cols === 1 && grid.stackLike) res.hint = "stacked";
     return res;
   }
