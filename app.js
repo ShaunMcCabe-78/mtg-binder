@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.8.1";
+const APP_VERSION = "1.8.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -557,6 +557,8 @@ function renderColl() {
   refreshPricesSoon();
   renderManage();
   if (!all.length) {
+    // Nothing left to select: leave select mode so its bar goes away.
+    S.sel = null; S.shown = []; body.classList.remove("selecting"); renderSelBar();
     body.innerHTML = view === "all" && !totals().n ? `<div class="empty"><h2>No cards yet</h2>
       <ol><li>On <b>Scan</b>, pick or create the collection to save to.</li><li>Photograph a stack of cards, check the names, then add them.</li><li>Open <b>Deck</b> to build from what you own.</li></ol>
       <div class="row"><button class="primary" id="goScan">Scan cards</button></div></div>`
@@ -589,7 +591,7 @@ function renderSelBar() {
   bar.hidden = !sel; $("#selConfirm").hidden = true;
   if (!sel) return;
   const n = sel.size; $("#selCount").textContent = `${n} selected`;
-  $("#btnSelDel").disabled = !n;
+  $("#btnSelDel").disabled = !n; $("#btnSelAll").disabled = !S.shown.length;
   const allOn = S.shown.length && S.shown.every(k => sel.has(k));
   $("#btnSelAll").textContent = allOn ? "Select none" : "Select all";
 }
@@ -607,6 +609,7 @@ $("#btnSelDel").onclick = () => {
 };
 $("#selNo").onclick = () => { $("#selConfirm").hidden = true; };
 $("#selYes").onclick = () => {
+  if (!S.sel || !S.sel.size) { renderSelBar(); return; }
   const before = JSON.stringify(S.cols), ids = S.view === "all" ? S.order : [S.view];
   let copies = 0; for (const id of ids) for (const k of S.sel) { const c = S.cols[id].cards[k]; if (c) { copies += c.qty; delete S.cols[id].cards[k]; } }
   const n = S.sel.size; S.sel = new Set();
