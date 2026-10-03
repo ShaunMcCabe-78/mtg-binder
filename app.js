@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.10.3";
+const APP_VERSION = "1.11.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -30,7 +30,7 @@ const sriFor = url => { for (const [end, h] of Object.entries(TESS.sri)) if (url
 const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
 
 /* ---------- state + storage ---------- */
-const S = { scanMode: "stacked", cols: {}, order: [], target: "main", view: "all", buildFrom: "all", decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
+const S = { wish: [], scanMode: "stacked", cols: {}, order: [], target: "main", view: "all", buildFrom: "all", decks: [], photos: [], review: [], leftovers: [], fmt: "casual", colors: new Set(), filter: new Set(), deck: null, engine: "claude" };
 let DB = new Map();          // name -> card data
 let matcher = null;
 let extraNames = [], extraCards = {};
@@ -220,6 +220,7 @@ function updatePrices(all, extra) {
     if (BASIC_SET.has(keyOf(c.name))) continue;
     ids.add(priceId(c.name)); for (const key of Object.keys(c.sets || {})) ids.add(priceId(c.name, key));
   }
+  for (const w of S.wish) { if (BASIC_SET.has(keyOf(w.name))) continue; ids.add(priceId(w.name)); if (w.set) ids.add(priceId(w.name, w.set)); }
   for (const id of extra || []) ids.add(id);
   const todo = [...ids].filter(id => all || !(id in PRICES.p));
   if (!todo.length) return Promise.resolve(false);
@@ -258,7 +259,7 @@ function updatePrices(all, extra) {
 // Prices older than a day get refreshed when the collection is opened (online only).
 function refreshPricesSoon() {
   const stale = Date.now() - PRICES.at > DAY;
-  updatePrices(stale).then(changed => { if (changed) { if (!$("#pane-coll").hidden) renderColl(); if (!$("#pane-deck").hidden) renderDeck(); if (!$("#pane-set").hidden) renderPriceInfo(); } });
+  updatePrices(stale).then(changed => { if (changed) { if (!$("#pane-coll").hidden) renderColl(); if (!$("#pane-wish").hidden) renderWish(); if (!$("#pane-deck").hidden) renderDeck(); if (!$("#pane-set").hidden) renderPriceInfo(); } });
 }
 function renderPriceInfo() {
   const el = $("#priceStatus"); if (!el) return;
@@ -303,11 +304,12 @@ function suggHTML(list, attr) { return list.map(n => `<button data-${attr}="${es
 /* ---------- tabs ---------- */
 function showTab(name) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["scan", "coll", "deck", "set"].forEach(n => $("#pane-" + n).hidden = n !== name);
+  ["scan", "coll", "wish", "deck", "set"].forEach(n => $("#pane-" + n).hidden = n !== name);
   renderColSelects();
   if (name !== "coll") S.sel = null;
   if (name === "coll") renderColl();
   if (name === "deck") renderEngine();
+  if (name === "wish") renderWish();
   if (name === "set") renderSettings();
   window.scrollTo(0, 0);
 }
@@ -315,6 +317,17 @@ document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => show
 function renderHeader() { const t = totals(); $("#hdrCount").textContent = `${t.n} card${t.n === 1 ? "" : "s"} · ${t.u} unique`; }
 
 /* ---------- collection changes ---------- */
+// After cards are added: if some were on the wishlist, offer to take them off (by the number added).
+function offerWishTickOff(items) {
+  const got = new Map();
+  for (const it of items) { if (wishFind(it.name) >= 0) got.set(keyOf(it.name), (got.get(keyOf(it.name)) || 0) + (it.qty || 1)); }
+  if (!got.size) return;
+  const n = [...got.values()].reduce((a, b) => a + b, 0);
+  setTimeout(() => toast(`${got.size === 1 ? S.wish[wishFind([...got.keys()][0])].name + " is" : got.size + " cards are"} on your wishlist`, { label: "Tick off", run: () => {
+    for (const [k, q] of got) { let left = q; for (const w of S.wish.filter(w => keyOf(w.name) === k)) { const t = Math.min(left, w.qty); w.qty -= t; left -= t; } }
+    S.wish = S.wish.filter(w => w.qty > 0); persistWish(); if (!$("#pane-wish").hidden) renderWish(); toast(`Ticked off ${n} from your wishlist`);
+  } }), 2700);
+}
 function addToCollection(items, colId) {
   const now = Date.now();
   const byCol = {};
@@ -330,6 +343,7 @@ function addToCollection(items, colId) {
   }
   persist(); renderHeader(); renderColSelects();
   fetchMissingDetails(items.map(i => i.name));
+  offerWishTickOff(items);
   updatePrices(false);
 }
 // Look up cards that aren't in the downloaded list (brand-new sets) on Scryfall, when online.
@@ -567,11 +581,12 @@ $("#btnManualAdd").onclick = () => {
 $("#manualName").addEventListener("keydown", e => { if (e.key === "Enter") $("#btnManualAdd").click(); });
 $("#btnPasteAdd").onclick = () => {
   const text = $("#pasteList").value; if (!text.trim()) return;
-  const items = []; let col = null;
+  const items = []; let col = null, toWish = false; const wished = [];
   for (let line of text.split(/\r?\n/)) {
     line = line.trim();
     const h = /^#+\s*collection:\s*(.+)$/i.exec(line);
-    if (h) { col = newCollection(h[1]); continue; }
+    if (h) { col = newCollection(h[1]); toWish = false; continue; }
+    if (/^#+\s*wish\s*list\s*$/i.test(line)) { toWish = true; continue; }
     if (!line || line.startsWith("#") || /^(deck|sideboard|commander|companion|maybeboard|about|name .*)$/i.test(line)) continue;
     const m = line.match(/^(\d+)\s*x?\s+(.+)$/i);
     let qty = 1, name = line; if (m) { qty = parseInt(m[1], 10) || 1; name = m[2]; }
@@ -585,9 +600,11 @@ $("#btnPasteAdd").onclick = () => {
     name = name.replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\([A-Za-z0-9]{2,6}\)\s*\S*\s*(\*F\*)?$/, "").replace(/^[-•*]\s*/, "").trim();
     if (!name) continue;
     const can = matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name);
+    if (toWish) { wished.push({ name: can || name, qty, set: sets ? Object.keys(sets)[0] : "", foil: !!foil }); continue; }
     items.push({ name: can || name, qty, low: !can || keyOf(can) !== keyOf(name), col: col || undefined, sets, foil });
   }
-  if (!items.length) return;
+  if (wished.length) { for (const w of wished.reverse()) addToWish(w.name, w.qty, w.set, w.foil); toast(`Restored ${wished.length} wishlist entr${wished.length === 1 ? "y" : "ies"}`); }
+  if (!items.length) { $("#pasteList").value = ""; return; }
   for (const it of items) { const ex = S.review.find(r => r.name === it.name && r.col === it.col); if (ex) { ex.qty += it.qty; addSets(ex, it.sets, it.foil); } else S.review.push(it); }
   $("#pasteList").value = "";
   renderReview(true);
@@ -774,8 +791,10 @@ function openCard(k) {
     <div class="sugg" id="shSugg"></div>
     <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove everywhere</button></div>
     <div class="panel" id="shDelConfirm" hidden><p>Remove all ${c.qty} cop${c.qty === 1 ? "y" : "ies"} of ${esc(c.name)} from every collection?</p><div class="row"><button class="primary" id="shYes">Remove</button><button id="shNo">Keep</button></div></div>
-    <a class="small" href="https://scryfall.com/search?q=${encodeURIComponent('!"' + c.name + '"')}" target="_blank" rel="noopener">Open on Scryfall</a>`;
+    <div class="row"><button class="wishbtn" id="shWish">♡ Add to wishlist</button><a class="small" href="https://scryfall.com/search?q=${encodeURIComponent('!"' + c.name + '"')}" target="_blank" rel="noopener">Open on Scryfall</a></div>`;
   $("#sheetBg").hidden = false;
+  $("#shWish").onclick = () => { addToWish(c.name, 1); $("#shWish").textContent = "♥ On your wishlist"; $("#shWish").setAttribute("aria-pressed", "true"); toast(`Added ${c.name} to your wishlist`); };
+  if (wishFind(c.name) >= 0) { $("#shWish").textContent = "♥ On your wishlist · add another"; $("#shWish").setAttribute("aria-pressed", "true"); }
   const showImg = key => {
     const box = $("#shImg"); if (!box || !navigator.onLine) return;
     box.innerHTML = `<img src="${imgOf(key)}" alt="${esc(c.name)}" loading="lazy">`;
@@ -831,6 +850,100 @@ function openCard(k) {
 }
 function closeSheet() { $("#sheetBg").hidden = true; $("#sheet").innerHTML = ""; }
 $("#sheetBg").addEventListener("click", e => { if (e.target === $("#sheetBg")) closeSheet(); });
+
+/* ---------- WISHLIST ----------
+   S.wish: [{ name, qty, set ("SOS:178", "SOA:" or ""), foil, added }]. Stored on the phone; prices from the price list. */
+function persistWish() { lsSet("mtg.wish", S.wish); }
+function wishFind(name) { const k = keyOf(name); return S.wish.findIndex(w => keyOf(w.name) === k); }
+function addToWish(name, qty, set, foil) {
+  name = (matcher && (matcher.canonical(name) || (matcher.matchLine(name) || {}).name)) || name.trim(); if (!name) return null;
+  // The same card, printing and finish is one entry with a higher count.
+  const ex = S.wish.find(w => keyOf(w.name) === keyOf(name) && (w.set || "") === (set || "") && !!w.foil === !!foil);
+  if (ex) ex.qty += qty; else S.wish.unshift({ name, qty, set: set || "", foil: !!foil, added: Date.now() });
+  persistWish(); updatePrices(false).then(ch => { if (ch && !$("#pane-wish").hidden) renderWish(); });
+  return name;
+}
+const wishEach = w => copyPrice(w.name, w.set, w.foil);
+function renderWish() {
+  const owned = merged("all");
+  let total = 0, missing = 0, n = 0;
+  for (const w of S.wish) { n += w.qty; const p = wishEach(w); if (p) total += p.v * w.qty; else if (!BASIC_SET.has(keyOf(w.name))) missing += w.qty; }
+  $("#wishSummary").textContent = n ? `${n} card${n === 1 ? "" : "s"}` + (total ? ` · ≈ ${fmtEur(total)}` : "") + (missing ? ` · ${missing} without a price` : "") : "";
+  const sort = $("#wishSort").value;
+  const rows = S.wish.map((w, i) => ({ w, i, p: wishEach(w) }));
+  const each = r => r.p ? r.p.v : -1;
+  rows.sort((a, b) => sort === "name" ? a.w.name.localeCompare(b.w.name) : sort === "each" ? each(b) - each(a) : sort === "total" ? each(b) * b.w.qty - each(a) * a.w.qty : (b.w.added || 0) - (a.w.added || 0));
+  $("#wishBody").innerHTML = rows.length ? `<div class="list">${rows.map(({ w, i, p }) => {
+    const ci = info(w.name), own = owned[keyOf(w.name)];
+    return `<div class="crow">
+      <button class="nm" data-wopen="${i}">${esc(w.name)}</button>
+      <div class="meta">${ci ? costHTML(ci.c) + `<span>${esc(ci.t)}</span>` : '<span class="badge bad">not in card list</span>'}${p ? `<span class="price">${p.approx ? "≈" : ""}${fmtEur(p.v * w.qty)}${w.qty > 1 ? ` <span class="each">(${fmtEur(p.v)} each)</span>` : ""}</span>` : ""}${w.set ? setChips({ [w.set]: 1 }) : ""}${w.foil ? '<span class="badge foil">✦ Foil</span>' : ""}${own ? `<span class="badge own">you have ${own.qty}</span>` : ""}</div>
+      <div class="ctl stepper"><button data-wd="${i}" aria-label="Fewer ${esc(w.name)}">−</button><span>${w.qty}</span><button data-wi="${i}" aria-label="More ${esc(w.name)}">+</button></div>
+    </div>`; }).join("")}</div>`
+    : `<div class="empty"><h2>Your wishlist is empty</h2><p class="muted">Add cards you'd like to get above, or tap ♡ Add to wishlist on any card. You'll see what they cost, and when you add one to your collection the app offers to tick it off.</p></div>`;
+  $("#btnCopyWish").disabled = !S.wish.length;
+  refreshPricesSoon();
+}
+$("#wishSort").onchange = renderWish;
+let wQty = 1;
+$("#wMinus").onclick = () => { wQty = Math.max(1, wQty - 1); $("#wQty").textContent = wQty; };
+$("#wPlus").onclick = () => { wQty++; $("#wQty").textContent = wQty; };
+$("#wishName").addEventListener("input", () => { const v = $("#wishName").value; $("#wishSugg").innerHTML = matcher && v.trim().length >= 2 ? suggHTML(matcher.suggest(v, 5), "pick") : ""; });
+$("#wishSugg").onclick = e => { const b = e.target.closest("button[data-pick]"); if (!b) return; $("#wishName").value = b.dataset.pick; $("#wishSugg").innerHTML = ""; };
+$("#btnWishAdd").onclick = () => {
+  const raw = $("#wishName").value.trim(); if (!raw) { $("#wishName").focus(); return; }
+  const name = addToWish(raw, wQty);
+  toast(`Added ${wQty} × ${name} to your wishlist${matcher && !matcher.isCard(name) ? " (not in the card list)" : ""}`);
+  $("#wishName").value = ""; $("#wishSugg").innerHTML = ""; wQty = 1; $("#wQty").textContent = 1; renderWish();
+};
+$("#wishName").addEventListener("keydown", e => { if (e.key === "Enter") $("#btnWishAdd").click(); });
+$("#wishBody").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.wopen != null) { openWish(+b.dataset.wopen); return; }
+  const i = +(b.dataset.wi ?? b.dataset.wd); if (isNaN(i) || !S.wish[i]) return;
+  if (b.dataset.wi != null) S.wish[i].qty++;
+  else { S.wish[i].qty--; if (S.wish[i].qty <= 0) { const gone = S.wish.splice(i, 1)[0]; toast(`Removed ${gone.name}`, { label: "Undo", run: () => { S.wish.splice(i, 0, { ...gone, qty: 1 }); persistWish(); renderWish(); } }); } }
+  persistWish(); renderWish();
+});
+const wishLine = w => { const [code, num] = (w.set || "").split(":"); return `${w.qty} ${w.name}${code ? ` (${code})${num ? " " + num : ""}` : ""}${w.foil ? " *F*" : ""}`; };
+$("#btnCopyWish").onclick = () => copyText(S.wish.map(w => `${w.qty} ${w.name}`).join("\n"));
+
+// One wishlist entry: picture, printing, foil, count, price, how many you own.
+function openWish(i) {
+  const w = S.wish[i]; if (!w) return;
+  const ci = info(w.name), own = merged("all")[keyOf(w.name)];
+  let set = w.set || "", foil = !!w.foil, qty = w.qty;
+  const imgOf = key => { const [code, num] = (key || "").split(":");
+    return code && num ? `https://api.scryfall.com/cards/${encodeURIComponent(code.toLowerCase())}/${encodeURIComponent(num)}?format=image&version=normal`
+      : `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(w.name)}${code ? "&set=" + encodeURIComponent(code.toLowerCase()) : ""}&format=image&version=normal`; };
+  const opts = () => { const keys = printsOf(w.name).map(p => p.code + ":" + p.num); if (set && !keys.includes(set)) keys.unshift(set);
+    return `<option value="">Any printing</option>` + keys.map(k => `<option value="${esc(k)}"${k === set ? " selected" : ""}>${esc(printLabel(k, true))}</option>`).join(""); };
+  const priceText = () => { const p = copyPrice(w.name, set, foil); return p ? `${p.approx ? "≈ " : ""}${fmtEur(p.v)} each · ${fmtEur(p.v * qty)} for ${qty}` : (navigator.onLine ? "Price loading…" : "No price saved yet"); };
+  $("#sheet").innerHTML = `<div class="grab"></div>
+    <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><h2 style="min-width:0">${esc(w.name)}</h2><button class="ghost" id="shClose" aria-label="Close">✕</button></div>
+    <div class="cardimg" id="shImg">${navigator.onLine ? `<img src="${imgOf(set)}" alt="${esc(w.name)}" loading="lazy">` : "Picture needs internet"}</div>
+    ${ci ? `<div class="stack" style="gap:6px"><div class="row">${costHTML(ci.c)}<span class="small muted">mana value ${ci.v}</span></div><b>${esc(ci.t)}${ci.p ? " · " + esc(ci.p) : ""}</b>${ci.o ? `<p class="oracle">${esc(ci.o)}</p>` : ""}</div>` : ""}
+    <p class="small"><b id="wPrice">${priceText()}</b> <span class="muted">· Cardmarket via Scryfall</span></p>
+    ${own ? `<p class="small"><span class="badge own">you have ${own.qty}</span> in ${esc(Object.keys(own.where).map(colName).join(", "))}</p>` : ""}
+    <div class="stack" style="gap:8px"><h3>What you want</h3>
+      <div class="wrow" style="display:flex;justify-content:space-between;align-items:center"><span>Copies</span><div class="stepper"><button id="wsMinus" aria-label="Fewer">−</button><span id="wsQty">${qty}</span><button id="wsPlus" aria-label="More">+</button></div></div>
+      <label class="field">Printing<select id="wsSet">${opts()}</select></label>
+      <button class="wishbtn" id="wsFoil" aria-pressed="${foil}">✦ Foil</button>
+    </div>
+    <div class="row"><button class="primary" id="wsSave" style="flex:1">Save</button><button class="ghost danger" id="wsDel">Remove</button></div>`;
+  $("#sheetBg").hidden = false;
+  const showImg = () => { const box = $("#shImg"); if (!box || !navigator.onLine) return; box.innerHTML = `<img src="${imgOf(set)}" alt="${esc(w.name)}">`; box.querySelector("img").onerror = function () { box.textContent = "No picture available"; }; };
+  showImg();
+  const refresh = () => { $("#wPrice").textContent = priceText(); };
+  loadPrints().then(() => { if ($("#wsSet")) $("#wsSet").innerHTML = opts(); });
+  $("#shClose").onclick = closeSheet;
+  $("#wsMinus").onclick = () => { qty = Math.max(1, qty - 1); $("#wsQty").textContent = qty; refresh(); };
+  $("#wsPlus").onclick = () => { qty++; $("#wsQty").textContent = qty; refresh(); };
+  $("#wsSet").onchange = () => { set = $("#wsSet").value; showImg(); refresh(); updatePrices(false, [priceId(w.name, set)]).then(refresh); };
+  $("#wsFoil").onclick = () => { foil = !foil; $("#wsFoil").setAttribute("aria-pressed", String(foil)); refresh(); };
+  $("#wsSave").onclick = () => { Object.assign(w, { qty, set, foil }); persistWish(); updatePrices(false); renderWish(); closeSheet(); toast("Saved"); };
+  $("#wsDel").onclick = () => { const at = S.wish.indexOf(w); S.wish.splice(at, 1); persistWish(); renderWish(); closeSheet(); toast(`Removed ${w.name}`, { label: "Undo", run: () => { S.wish.splice(at, 0, w); persistWish(); renderWish(); } }); };
+}
 
 /* ---------- DECK ---------- */
 $("#deckColors").innerHTML = ["W", "U", "B", "R", "G"].map(c => `<button class="chip" aria-pressed="false" data-c="${c}"><span class="pip ${c}">${c}</span>${COLOR_NAMES[c]}</button>`).join("");
@@ -1204,10 +1317,10 @@ $("#btnPrices").onclick = async () => {
   b.disabled = true; b.textContent = "Updating…";
   await updatePrices(true); b.disabled = false; b.textContent = "Update prices now"; renderPriceInfo(); toast("Prices updated");
 };
-$("#btnBackup").onclick = () => copyText(collText("all", true));
+$("#btnBackup").onclick = () => copyText(collText("all", true) + (S.wish.length ? "\n\n# Wishlist\n" + S.wish.map(wishLine).join("\n") : ""));
 $("#btnReset").onclick = () => $("#resetConfirm").hidden = false;
 $("#noReset").onclick = () => $("#resetConfirm").hidden = true;
-$("#yesReset").onclick = () => { ["mtg.cards", "mtg.cols", "mtg.target", "mtg.view", "mtg.buildFrom", "mtg.decks", "mtg.apiKey", "mtg.engine"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cols = { main: { name: "My collection", created: Date.now(), cards: {} } }; S.order = ["main"]; S.target = "main"; S.view = "all"; S.buildFrom = "all"; renderColSelects(); S.decks = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
+$("#yesReset").onclick = () => { ["mtg.cards", "mtg.cols", "mtg.target", "mtg.view", "mtg.buildFrom", "mtg.decks", "mtg.apiKey", "mtg.engine", "mtg.wish"].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} }); S.cols = { main: { name: "My collection", created: Date.now(), cards: {} } }; S.order = ["main"]; S.target = "main"; S.view = "all"; S.buildFrom = "all"; renderColSelects(); S.decks = []; S.wish = []; S.deck = null; renderHeader(); renderSaved(); renderDeck(); $("#resetConfirm").hidden = true; renderSettings(); toast("Everything erased"); };
 async function checkOffline() {
   try {
     const c = await caches.open("mtg-cdn-2"); const hits = await Promise.all([TESS.lib, TESS.worker, TESS.core + TESS.coreFiles[0]].map(u => c.match(u)));
@@ -1265,6 +1378,7 @@ try { localStorage.removeItem("mtg.cards"); } catch (e) {}
 S.target = lsGet("mtg.target", S.order[0]); S.view = lsGet("mtg.view", "all"); S.buildFrom = lsGet("mtg.buildFrom", "all");
 renderColSelects(); persist();
 S.decks = lsGet("mtg.decks", []) || [];
+S.wish = lsGet("mtg.wish", []) || [];
 S.engine = lsGet("mtg.engine", "claude");
 S.scanMode = lsGet("mtg.scanMode", "stacked") === "grid" ? "grid" : "stacked"; renderScanMode();
 renderHeader(); renderSaved(); renderEngine();
