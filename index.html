@@ -109,6 +109,21 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .kv .stale{color:var(--warn);font-size:.85em}
 .badge.own{color:var(--accent);text-transform:none}
 .wishbtn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.hdrbtn{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;font-size:.85rem;margin-left:8px}
+.rule{padding:10px 12px;border-top:1px solid var(--line)}
+.rule:first-child{border-top:0}
+.rule .rn{font-family:var(--mono);font-size:.8rem;color:var(--accent);margin-right:6px;font-weight:600}
+.rule p{margin:0;line-height:1.45}
+.rule .ex{margin-top:8px;padding:8px 10px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:4px;font-size:.92rem;line-height:1.45}
+.rule .ex b{font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+.rule.hit{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.rref{all:unset;cursor:pointer;color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px;font-family:var(--mono);font-size:.92em}
+.rules-sec summary{padding:10px 12px;cursor:pointer;font-weight:700}
+.rules-sub{display:block;width:100%;text-align:left;padding:8px 12px 8px 22px;border:0;border-top:1px solid var(--line);background:none;color:var(--ink);font:inherit;cursor:pointer}
+.rules-sub .rn{font-family:var(--mono);color:var(--muted);margin-right:8px}
+mark{background:color-mix(in srgb,var(--accent) 35%,transparent);color:inherit;border-radius:2px}
+.answer{padding:10px 12px;border-radius:8px;background:var(--sunk);line-height:1.5;white-space:pre-wrap}
+.rulings li{margin-bottom:8px;line-height:1.45}
 .badge.set{color:var(--muted);text-transform:none}
 .price .each{color:var(--muted)}
 #collBody .vals,#collBody .lhead{display:none}
@@ -208,6 +223,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   <header class="top">
     <h1>Magic Binder</h1>
     <span class="count" id="hdrCount">0 cards</span>
+    <button class="ghost hdrbtn" id="btnRules" aria-label="Game rules"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h9"/></svg><span>Rules</span></button>
   </header>
   <div class="banner" id="updateBanner" hidden><span class="small">A new version of the app is ready.</span><button class="primary" id="btnUpdate">Update</button></div>
   <div class="banner" id="installBanner" hidden><span class="small" id="installText">Install: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Binder from your Home Screen.</span><button class="primary" id="btnInstall" hidden>Install</button><button class="ghost" id="btnHideInstall" aria-label="Hide">✕</button></div>
@@ -349,6 +365,25 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
   </section>
 
   <!-- DECK -->
+  <section class="pane" id="pane-rules" hidden>
+    <div class="stack">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
+        <h2>Game rules</h2>
+        <span class="small muted" id="rulesVersion"></span>
+      </div>
+      <input type="search" id="rulesSearch" placeholder="Search, e.g. trample, deathtouch, first strike" autocomplete="off" aria-label="Search the rules">
+      <details class="panel" id="rulesAskBox">
+        <summary><b>Ask a rules question</b> <span class="small muted">(Claude, with your API key)</span></summary>
+        <div class="stack" style="gap:8px;margin-top:8px">
+          <textarea id="rulesQ" rows="3" placeholder="e.g. My 6/6 trample is blocked by a 2/2 with deathtouch. How much damage gets through?"></textarea>
+          <div class="row"><button class="primary" id="btnRulesAsk">Ask</button><span class="small muted" id="rulesAskNote"></span></div>
+          <div id="rulesAnswer"></div>
+        </div>
+      </details>
+    </div>
+    <div id="rulesBody"></div>
+  </section>
+
   <section class="pane" id="pane-wish" hidden>
     <div class="stack">
       <div class="row" style="justify-content:space-between">

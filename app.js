@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.12.1";
+const APP_VERSION = "1.13.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -306,12 +306,13 @@ function suggHTML(list, attr) { return list.map(n => `<button data-${attr}="${es
 /* ---------- tabs ---------- */
 function showTab(name) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["scan", "coll", "wish", "deck", "set"].forEach(n => $("#pane-" + n).hidden = n !== name);
+  ["scan", "coll", "wish", "deck", "set", "rules"].forEach(n => $("#pane-" + n).hidden = n !== name);
   renderColSelects();
   if (name !== "coll") S.sel = null;
   if (name === "coll") renderColl();
   if (name === "deck") renderEngine();
   if (name === "wish") renderWish();
+  if (name === "rules") openRules();
   if (name === "set") renderSettings();
   window.scrollTo(0, 0);
 }
@@ -797,8 +798,11 @@ function openCard(k) {
     <div class="sugg" id="shSugg"></div>
     <div class="row"><button class="primary" id="shSave" style="flex:1">Save</button><button class="ghost danger" id="shDel">Remove everywhere</button></div>
     <div class="panel" id="shDelConfirm" hidden><p>Remove all ${c.qty} cop${c.qty === 1 ? "y" : "ies"} of ${esc(c.name)} from every collection?</p><div class="row"><button class="primary" id="shYes">Remove</button><button id="shNo">Keep</button></div></div>
+    <details class="stack" id="shRulings"><summary><b>Official rulings</b> <span class="small muted">(Wizards of the Coast, via Scryfall)</span></summary><div id="shRulingsBody" class="small muted" style="margin-top:6px">Loading…</div></details>
     <div class="row"><button class="wishbtn" id="shWish">♡ Add to wishlist</button><a class="small" href="https://scryfall.com/search?q=${encodeURIComponent('!"' + c.name + '"')}" target="_blank" rel="noopener">Open on Scryfall</a></div>`;
   $("#sheetBg").hidden = false;
+  // Official rulings for this card (loaded when opened; needs internet).
+  $("#shRulings").addEventListener("toggle", () => { if ($("#shRulings").open) loadRulings(c.name).then(html => { if ($("#shRulingsBody")) $("#shRulingsBody").innerHTML = html; }); });
   // Adds to the wishlist shown on the Wishlist tab; says which lists the card is already on.
   const wishLabel = () => { const on = wishListsWith(c.name), cur = S.wl.lists[S.wl.cur].name;
     $("#shWish").textContent = on.length ? `♥ On ${on.join(", ")}${on.includes(cur) ? " · add another" : ` · add to ${cur}`}` : `♡ Add to ${cur}`;
@@ -858,8 +862,163 @@ function openCard(k) {
   $("#shNo").onclick = () => $("#shDelConfirm").hidden = true;
   $("#shYes").onclick = () => { for (const id of S.order) delete S.cols[id].cards[k]; persist(); renderHeader(); renderColl(); closeSheet(); toast("Removed"); };
 }
+const rulingsCache = new Map();
+async function loadRulings(name) {
+  if (rulingsCache.has(name)) return rulingsCache.get(name);
+  if (!navigator.onLine) return "Rulings need internet.";
+  try {
+    const c = await (await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}`, { headers: { Accept: "application/json" } })).json();
+    if (!c.rulings_uri || !/^https:\/\/api\.scryfall\.com\//.test(c.rulings_uri)) return "No rulings found.";
+    const j = await (await fetch(c.rulings_uri, { headers: { Accept: "application/json" } })).json();
+    const list = (j.data || []).filter(r => r.source === "wotc" || !r.source);
+    await loadRules();
+    const html = list.length ? `<ul class="rulings">${list.map(r => `<li><span class="muted">${esc(r.published_at || "")}</span> — <span style="color:var(--ink)">${ruleHTML(r.comment || "")}</span></li>`).join("")}</ul>` : "This card has no official rulings.";
+    rulingsCache.set(name, html); return html;
+  } catch (e) { return "Rulings couldn't be loaded. Try again later."; }
+}
 function closeSheet() { $("#sheetBg").hidden = true; $("#sheet").innerHTML = ""; }
 $("#sheetBg").addEventListener("click", e => { if (e.target === $("#sheetBg")) closeSheet(); });
+
+/* ---------- RULES: the official Comprehensive Rules (rules.json, kept current by a weekly job), searchable offline ---------- */
+let RULES = null, rulesP = null, ruleIndex = null;   // ruleIndex: rule number -> { rule, sub, sec }
+function loadRules() {
+  return rulesP || (rulesP = fetch("rules.json").then(r => { if (!r.ok) throw 0; return r.json(); }).then(j => {
+    RULES = j; ruleIndex = new Map();
+    for (const sec of j.sections) for (const sub of sec[2]) { ruleIndex.set(sub[0], { sub, sec }); for (const r of sub[2]) ruleIndex.set(r[0], { rule: r, sub, sec }); }
+    return j;
+  }).catch(() => { rulesP = null; return null; }));
+}
+$("#btnRules").onclick = () => showTab("rules");
+let rulesView = null;   // null: sections; { sub: "702" , focus: "702.19b" }
+// Rule text with references ("rule 702.19b", "rule 702", "section 8") made tappable, and search words marked.
+function ruleHTML(text, words) {
+  let h = esc(text).replace(/\u2028/g, "<br>");
+  h = h.replace(/\b(rules?|section)\s+((?:\d{3}(?:\.\d+[a-z]?)?|[1-9])(?:(?:,\s*|\s+(?:and|or|through)\s+)\d{3}(?:\.\d+[a-z]?)?)*)/gi, (m) =>
+    m.replace(/\b(\d{3}(?:\.\d+[a-z]?)?)\b/g, n => ruleIndex && ruleIndex.has(n) ? `<button class="rref" data-rule="${n}">${n}</button>` : n));
+  for (const w of words || []) if (w.length > 2) h = h.replace(new RegExp(`(?<![<\\w-])(${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?![^<]*>)`, "gi"), "<mark>$1</mark>");
+  return h;
+}
+function oneRule(r, words, hit) {
+  return `<div class="rule${hit ? " hit" : ""}" id="r-${r[0].replace(".", "_")}"><p><span class="rn">${esc(r[0])}</span>${ruleHTML(r[1], words)}</p>${r[2].map(e => `<div class="ex"><b>Example</b><br>${ruleHTML(e, words)}</div>`).join("")}</div>`;
+}
+async function openRules() {
+  const body = $("#rulesBody");
+  if (!RULES) { body.innerHTML = '<p class="muted">Loading the rules…</p>'; await loadRules(); }
+  if (!RULES) { body.innerHTML = '<p class="err">The rules couldn\'t load. Connect to the internet once; after that they work offline.</p>'; return; }
+  $("#rulesVersion").textContent = `Comprehensive Rules, effective ${RULES.effective}`;
+  $("#rulesAskNote").textContent = apiKey() ? "" : "Needs your Claude API key (Settings).";
+  $("#btnRulesAsk").disabled = !apiKey();
+  renderRules();
+}
+function renderRules() {
+  const body = $("#rulesBody"); if (!RULES) return;
+  const q = $("#rulesSearch").value.trim();
+  if (q.length >= 2) { body.innerHTML = searchRulesHTML(q); return; }
+  if (rulesView) {
+    const { sub, sec } = ruleIndex.get(rulesView.sub);
+    body.innerHTML = `<div class="row" style="justify-content:space-between;margin:12px 0 6px"><button class="ghost small" id="rulesBack">‹ All sections</button><span class="small muted">${esc(sec[0])}. ${esc(sec[1])}</span></div>
+      <div class="list"><div class="rule"><p><span class="rn">${esc(sub[0])}</span><b>${esc(sub[1])}</b></p></div>${sub[2].map(r => oneRule(r, [], r[0] === rulesView.focus)).join("")}</div>`;
+    if (rulesView.focus) { const el = document.getElementById("r-" + rulesView.focus.replace(".", "_")); if (el) el.scrollIntoView({ block: "center" }); }
+    else window.scrollTo(0, 0);
+    return;
+  }
+  body.innerHTML = `<div class="list">${RULES.sections.map(sec => `<details class="rules-sec"><summary>${esc(sec[0])}. ${esc(sec[1])}</summary>${sec[2].map(sub => `<button class="rules-sub" data-sub="${esc(sub[0])}"><span class="rn">${esc(sub[0])}</span>${esc(sub[1])}</button>`).join("")}</details>`).join("")}
+    <details class="rules-sec"><summary>Glossary (${RULES.glossary.length} terms)</summary>${RULES.glossary.map(g => `<div class="rule"><p><b>${esc(g[0])}</b><br>${ruleHTML(g[1])}</p></div>`).join("")}</details></div>
+    <p class="small muted" style="margin-top:10px">Official Magic: The Gathering Comprehensive Rules by Wizards of the Coast, updated weekly from <a href="https://magic.wizards.com/en/rules" target="_blank" rel="noopener">magic.wizards.com/en/rules</a>.</p>`;
+}
+const STOP = new Set("the a an and or of to in on is it its if what when how does do i my your their with for at by from as be can this that which who whom are was were will would should there they them then than so not no any all".split(" "));
+const qWords = q => (q.toLowerCase().match(/[a-z0-9'’-]+/g) || []).filter(w => !STOP.has(w));
+// Rules and glossary entries that contain all the words (or a rule number); glossary first.
+function searchRules(q, limit) {
+  const words = qWords(q), out = [];
+  const num = /^\d{3}(\.\d+[a-z]?)?$/.test(q.trim()) ? q.trim() : null;
+  if (num && ruleIndex.has(num)) { const x = ruleIndex.get(num); if (x.rule) out.push({ kind: "rule", r: x.rule, score: 100 }); }
+  for (const g of RULES.glossary) {
+    const t = (g[0] + " " + g[1]).toLowerCase(); if (!words.length || !words.every(w => t.includes(w))) continue;
+    out.push({ kind: "gloss", g, score: (words.some(w => g[0].toLowerCase().includes(w)) ? 50 : 10) + (g[0].toLowerCase() === q.toLowerCase() ? 100 : 0) });
+  }
+  for (const sec of RULES.sections) for (const sub of sec[2]) for (const r of sub[2]) {
+    const t = (r[1] + " " + r[2].join(" ") + " " + sub[1]).toLowerCase();
+    if (!words.length || !words.every(w => t.includes(w))) continue;
+    let sc = 0; for (const w of words) { sc += (t.split(w).length - 1); if (sub[1].toLowerCase().includes(w)) sc += 8; }
+    out.push({ kind: "rule", r, sub, score: sc + (r[2].length ? 2 : 0) });
+  }
+  // Few rules with every word: add rules with most of the words, ranked below the full matches.
+  if (words.length > 1 && out.filter(x => x.kind === "rule").length < 8) {
+    const have = new Set(out.map(x => x.r && x.r[0]));
+    for (const sec of RULES.sections) for (const sub of sec[2]) for (const r of sub[2]) {
+      if (have.has(r[0])) continue;
+      const t = (r[1] + " " + r[2].join(" ") + " " + sub[1]).toLowerCase(), n = words.filter(w => t.includes(w)).length;
+      if (n >= Math.max(1, words.length - 1)) out.push({ kind: "rule", r, sub, score: n - words.length + (sub[1].toLowerCase().includes(words[0]) ? 0.5 : 0) + (r[2].length ? 0.2 : 0) });
+    }
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, limit || 60);
+}
+function searchRulesHTML(q) {
+  const res = searchRules(q, 60), words = qWords(q);
+  if (!res.length) return `<p class="muted" style="margin-top:12px">Nothing found for “${esc(q)}”. Try fewer or different words.</p>`;
+  return `<p class="small muted" style="margin:10px 0 6px">${res.length >= 60 ? "Top 60" : res.length} result${res.length === 1 ? "" : "s"}</p><div class="list">${res.map(x => x.kind === "gloss"
+    ? `<div class="rule"><p><span class="rn">Glossary</span><b>${esc(x.g[0])}</b><br>${ruleHTML(x.g[1], words)}</p></div>`
+    : oneRule(x.r, words)).join("")}</div>`;
+}
+let rulesTimer = null;
+$("#rulesSearch").addEventListener("input", () => { clearTimeout(rulesTimer); rulesTimer = setTimeout(() => { rulesView = null; renderRules(); }, 200); });
+// Tap a rule reference → that rule in its subsection; a subsection → its rules.
+document.addEventListener("click", e => {
+  const ref = e.target.closest("[data-rule]"); const sub = e.target.closest("[data-sub]"); const back = e.target.closest("#rulesBack");
+  if (!ref && !sub && !back) return;
+  if (!ruleIndex) return;
+  if (back) { rulesView = null; renderRules(); return; }
+  const id = ref ? ref.dataset.rule : sub.dataset.sub, x = ruleIndex.get(id); if (!x) return;
+  if (!$("#sheetBg").hidden) closeSheet();
+  if ($("#pane-rules").hidden) showTab("rules");
+  $("#rulesSearch").value = ""; rulesView = { sub: x.sub[0], focus: x.rule ? x.rule[0] : null }; renderRules();
+});
+// The rules most relevant to a question (for Claude): best matches on any of its words.
+function relevantRules(q, n) {
+  const words = qWords(q); if (!words.length) return [];
+  const scored = [];
+  for (const sec of RULES.sections) for (const sub of sec[2]) for (const r of sub[2]) {
+    const t = (r[1] + " " + r[2].join(" ")).toLowerCase(), st = sub[1].toLowerCase(); let sc = 0;
+    for (const w of words) { const c = t.split(w).length - 1; if (c) sc += 1 + Math.min(c, 3) * 0.3; if (st.includes(w)) sc += 2.5; }
+    if (sc > 1) scored.push([sc, r]);
+  }
+  const gl = RULES.glossary.filter(g => words.some(w => g[0].toLowerCase() === w || g[0].toLowerCase().startsWith(w + " "))).slice(0, 6);
+  scored.sort((a, b) => b[0] - a[0]);
+  return { rules: scored.slice(0, n || 30).map(x => x[1]), glossary: gl };
+}
+// Card names mentioned in a question (longest first), with their rules text.
+function cardsIn(text) {
+  if (!matcher) return [];
+  const found = [], t = " " + text.toLowerCase().replace(/[’]/g, "'") + " ";
+  for (const name of DB.keys()) { if (name.length < 4) continue; const n = name.toLowerCase(); if (t.includes(n)) found.push(name); }
+  return found.sort((a, b) => b.length - a.length).filter((n, i, arr) => !arr.slice(0, i).some(m => m.toLowerCase().includes(n.toLowerCase()))).slice(0, 8);
+}
+$("#btnRulesAsk").onclick = async () => {
+  const q = $("#rulesQ").value.trim(); if (!q) { $("#rulesQ").focus(); return; }
+  await loadRules(); if (!RULES) return;
+  const b = $("#btnRulesAsk"); b.disabled = true; b.textContent = "Asking…"; $("#rulesAnswer").innerHTML = "";
+  try {
+    const rel = relevantRules(q, 30), cards = cardsIn(q);
+    const cardText = cards.map(n => { const c = info(n) || {}; return `${n} — ${c.c || ""} — ${c.t || ""}${c.p ? " — " + c.p : ""}\n${c.o || ""}`; }).join("\n\n");
+    const prompt = `You are an experienced Magic: The Gathering judge helping players settle a rules question at the table.
+Answer using the Comprehensive Rules (effective ${RULES.effective}). The excerpts below were picked by keyword search and may be incomplete; use your knowledge of the rules where needed.
+Format: first a one- or two-sentence direct answer. Then "Why:" with a short step-by-step explanation citing rule numbers in square brackets like [702.19b]. Then "Example:" with a brief concrete example. If the outcome depends on details the question doesn't give, say which and what changes. Keep it under 250 words. Plain text, no markdown headings.
+
+QUESTION:
+${q}
+${cardText ? `\nCARDS MENTIONED (Oracle text, may be shortened):\n${cardText}\n` : ""}
+RULES EXCERPTS:
+${rel.rules.map(r => `${r[0]} ${r[1]}${r[2].length ? " Example: " + r[2].join(" Example: ") : ""}`).join("\n")}
+${rel.glossary.length ? "\nGLOSSARY:\n" + rel.glossary.map(g => g[0] + ": " + g[1]).join("\n") : ""}`;
+    const a = await askClaude(prompt, 1200);
+    // Escape, then make cited rule numbers tappable.
+    const html = esc(a).replace(/\[(\d{3}(?:\.\d+[a-z]?)?)\]/g, (m, n) => ruleIndex.has(n) ? `<button class="rref" data-rule="${n}">${n}</button>` : m);
+    $("#rulesAnswer").innerHTML = `<div class="answer">${html}</div><p class="small muted" style="margin-top:6px">Answer by Claude from the official rules${cards.length ? ` and the cards ${esc(cards.join(", "))}` : ""}. Tap a rule number to read it.</p>`;
+  } catch (e) { $("#rulesAnswer").innerHTML = `<p class="err">${esc(claudeErr(e).replace("build the deck", "answer"))}</p>`; }
+  finally { b.disabled = !apiKey(); b.textContent = "Ask"; }
+};
 
 /* ---------- WISHLIST ----------
    S.wish: [{ name, qty, set ("SOS:178", "SOA:" or ""), foil, added }]. Stored on the phone; prices from the price list. */

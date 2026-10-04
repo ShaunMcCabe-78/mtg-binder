@@ -1,6 +1,6 @@
 /* Offline support: keeps the app, card list and text reader on the phone.
    App files are re-downloaded on each version; the big data files live in their own cache and are kept across updates. */
-const VERSION = "binder-v1.12.1";
+const VERSION = "binder-v1.13.0";
 const DATA_CACHE = "binder-data-1";   // bump only when cards.json or the reader data changes
 const APP = ["./", "index.html", "app.js", "matcher.js", "namebars.js", "scan-core.js", "scan-stacked.js", "cards.js", "scan-grid.js", "scan-set.js", "builder.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
@@ -46,6 +46,15 @@ self.addEventListener("fetch", e => {
   }
   if (url.hostname === "api.scryfall.com" || url.hostname.endsWith("scryfall.io")) {
     e.respondWith(cacheFirst(req, "mtg-img")); return;
+  }
+  // The rules are updated weekly on the site: fetch fresh when online, else the saved copy.
+  if (url.origin === self.location.origin && url.pathname.endsWith("/rules.json")) {
+    e.respondWith((async () => {
+      const c = await caches.open(DATA_CACHE);
+      try { const res = await fetch(fresh(req.url)); if (res.ok) { c.put("rules.json", res.clone()); return res; } } catch (err) {}
+      return (await c.match("rules.json")) || new Response("{}", { status: 503 });
+    })());
+    return;
   }
   if (url.origin === self.location.origin) {
     e.respondWith((async () => {
