@@ -16,6 +16,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 - **Sets:** in Grid mode the whole card shows, so the app also reads which printing each card is from the small print at the bottom left (e.g. "U 0178 · SOS • EN"). If it can't tell, no set is recorded. In the card sheet you can set or change the printing of each copy; Stacked scans save cards without a set. The backup keeps sets as `2 Name (SOS) 178` lines.
 - **Prices:** euro prices from Cardmarket via Scryfall (updated daily): per copy in the card sheet (by its recorded printing), per card and in total in the collection (sort by value), per deck, and for everything in Settings. Kept on the phone for offline viewing.
 - **Rules:** the official Comprehensive Rules (downloaded weekly from Wizards of the Coast by `.github/workflows/rules.yml` into `rules.json`), searchable offline, with examples and tappable rule references; ask a rules question (Claude, with your key, citing rule numbers); official rulings in each card's details (Scryfall).
+- **Combat simulator** (Rules screen): put creatures on each side, choose blocks, and see each combat step with the rules cited — flying/reach/menace/defender, first and double strike, trample, deathtouch, lifelink, indestructible, vigilance. "Explain with Claude" checks the result against the cards' other abilities.
 - **Wishlists:** as many named lists as you like (create, rename, delete under Manage). Each holds cards you want, with count, optional printing and foil, current euro prices and total, and how many you already own. Add from the Wishlist tab or with ♡ on any card; when you add a wished-for card to a collection, the app offers to tick it off. Included in the backup as `# Wishlist: Name` sections.
 - **Foil:** mark any copy as foil in the card sheet (✦ Foil). Foil copies are valued at the foil price, show a ✦ Foil tag in the list, and can be found by searching "foil". The backup writes them as `1 Name (SOS) 178 *F*`.
 - **Deleting cards:** in the collection list tap **Select**, tick one or more cards, then **Delete** (with Undo). In "All collections" it removes them everywhere; in one collection only from that one.
@@ -36,6 +37,7 @@ Then open **Binder** from your Home Screen. Each phone keeps its own collection.
 | `scan-core.js` | Shared scanning steps: text direction, bar finding, reading one bar |
 | `scan-stacked.js` | Stacked layout: overlapped cards in one column |
 | `rules.json` | Comprehensive Rules: sections, rules with examples, glossary (built by `scripts/build_rules.py`) |
+| `sim.js` | Combat simulator: resolves a combat under the Comprehensive Rules, step by step |
 | `cards.js` | Grid layout: finds each card's outline (63 × 88 mm, dark border), its exact size and tilt, and straightens it |
 | `scan-grid.js` | Grid layout: cards side by side; works out the grid and reads each card's name bar |
 | `scan-set.js` | Grid layout: reads which printing (set code and collector number) each card is |

@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.13.0";
+const APP_VERSION = "1.14.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -973,6 +973,8 @@ document.addEventListener("click", e => {
   const id = ref ? ref.dataset.rule : sub.dataset.sub, x = ruleIndex.get(id); if (!x) return;
   if (!$("#sheetBg").hidden) closeSheet();
   if ($("#pane-rules").hidden) showTab("rules");
+  // From the simulator: switch to the rules view (the simulator keeps its setup and result).
+  if (!$("#simMain").hidden) $("#rulesSeg button[data-rmode=rules]").click();
   $("#rulesSearch").value = ""; rulesView = { sub: x.sub[0], focus: x.rule ? x.rule[0] : null }; renderRules();
 });
 // The rules most relevant to a question (for Claude): best matches on any of its words.
@@ -1019,6 +1021,94 @@ ${rel.glossary.length ? "\nGLOSSARY:\n" + rel.glossary.map(g => g[0] + ": " + g[
   } catch (e) { $("#rulesAnswer").innerHTML = `<p class="err">${esc(claudeErr(e).replace("build the deck", "answer"))}</p>`; }
   finally { b.disabled = !apiKey(); b.textContent = "Ask"; }
 };
+
+/* ---------- COMBAT SIMULATOR (sim.js does the rules; this is the screen) ---------- */
+const SIM = { A: [], D: [], lifeA: 20, lifeD: 20, n: 0 };
+$("#rulesSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; const sim = b.dataset.rmode === "sim";
+  document.querySelectorAll("#rulesSeg button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  $("#rulesMain").hidden = sim; $("#rulesBody").hidden = sim; $("#simMain").hidden = !sim; if (sim) renderSim(); };
+const ptOf = p => { const m = /^(-?\d+)\/(-?\d+)/.exec(p || ""); return m ? [+m[1], +m[2]] : [0, 1]; };
+function simAdd(side, name) {
+  const ci = info(name) || {}; const [p, t] = ptOf(ci.p);
+  SIM[side].push({ id: ++SIM.n, name, power: p, toughness: t, base: [p, t], kw: CombatSim.keywordsFrom(ci.o || ""), blocks: null });
+  renderSim();
+}
+function simCardHTML(c, side) {
+  const atk = SIM.A;
+  return `<div class="simc"><div class="top"><b>${esc(c.name)}</b><button class="ghost small" data-sdel="${side}${c.id}" aria-label="Remove ${esc(c.name)}">✕</button></div>
+    <div class="top"><div class="pt"><button data-spt="${side}${c.id}:p-" aria-label="Less power">−</button><b>${c.power}</b><button data-spt="${side}${c.id}:p+" aria-label="More power">+</button> / <button data-spt="${side}${c.id}:t-" aria-label="Less toughness">−</button><b>${c.toughness}</b><button data-spt="${side}${c.id}:t+" aria-label="More toughness">+</button></div>
+    </div>${side === "D" ? `<select data-sblk="${c.id}" aria-label="What ${esc(c.name)} blocks" style="width:100%"><option value="">Doesn't block</option>${atk.map(a => `<option value="${a.id}"${c.blocks === a.id ? " selected" : ""}>Blocks ${esc(a.name)}${atk.filter(x => x.name === a.name).length > 1 ? " #" + (atk.filter(x => x.name === a.name).indexOf(a) + 1) : ""}</option>`).join("")}</select>` : ""}
+    <div class="kws">${CombatSim.KW.map(k => `<button data-skw="${side}${c.id}:${k}" aria-pressed="${c.kw.includes(k)}">${k}</button>`).join("")}</div></div>`;
+}
+function renderSim() {
+  $("#simLifeA").textContent = SIM.lifeA; $("#simLifeD").textContent = SIM.lifeD;
+  // A blocker can't keep blocking an attacker that was removed.
+  for (const b of SIM.D) if (b.blocks && !SIM.A.some(a => a.id === b.blocks)) b.blocks = null;
+  $("#simListA").innerHTML = SIM.A.map(c => simCardHTML(c, "A")).join("") || '<p class="small muted">No attackers yet.</p>';
+  $("#simListD").innerHTML = SIM.D.map(c => simCardHTML(c, "D")).join("") || '<p class="small muted">No blockers yet (attackers are then unblocked).</p>';
+  $("#btnSimRun").disabled = !SIM.A.length;
+}
+const simFind = key => { const side = key[0], id = +key.slice(1); return [side, SIM[side].find(c => c.id === id)]; };
+for (const side of ["A", "D"]) {
+  const inp = $("#simAdd" + side), sug = $("#simSugg" + side);
+  inp.addEventListener("input", () => { const v = inp.value.trim();
+    // Creature cards first in the suggestions.
+    const list = matcher && v.length >= 2 ? matcher.suggest(v, 12).filter(n => /creature/i.test((info(n) || {}).t || "")).slice(0, 6) : [];
+    sug.innerHTML = list.map(n => { const ci = info(n) || {}; return `<button data-sadd="${side}" data-name="${esc(n)}">${esc(n)} <span class="muted">${esc(ci.p || "")}</span></button>`; }).join(""); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { const b = sug.querySelector("button"); if (b) b.click(); } });
+}
+$("#simMain").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.sadd) { simAdd(b.dataset.sadd, b.dataset.name); const inp = $("#simAdd" + b.dataset.sadd); inp.value = ""; $("#simSugg" + b.dataset.sadd).innerHTML = ""; $("#simOut").innerHTML = ""; return; }
+  if (b.dataset.life) { const k = "life" + b.dataset.life[0]; SIM[k] = Math.max(1, SIM[k] + (b.dataset.life[1] === "+" ? 1 : -1)); renderSim(); return; }
+  if (b.dataset.sdel) { const [side, c] = simFind(b.dataset.sdel); SIM[side] = SIM[side].filter(x => x !== c); renderSim(); $("#simOut").innerHTML = ""; return; }
+  if (b.dataset.spt) { const [key, op] = b.dataset.spt.split(":"); const [, c] = simFind(key); if (op[0] === "p") c.power = Math.max(0, c.power + (op[1] === "+" ? 1 : -1)); else c.toughness = Math.max(1, c.toughness + (op[1] === "+" ? 1 : -1)); renderSim(); return; }
+  if (b.dataset.skw) { const [key, k] = b.dataset.skw.split(":"); const [, c] = simFind(key); c.kw = c.kw.includes(k) ? c.kw.filter(x => x !== k) : c.kw.concat(k); renderSim(); return; }
+});
+$("#simMain").addEventListener("change", e => { const t = e.target; if (t.dataset.sblk == null) return; const b = SIM.D.find(c => c.id === +t.dataset.sblk); if (b) b.blocks = t.value ? +t.value : null; $("#simOut").innerHTML = ""; });
+$("#btnSimClear").onclick = () => { SIM.A = []; SIM.D = []; SIM.lifeA = SIM.lifeD = 20; $("#simOut").innerHTML = ""; renderSim(); };
+let lastSim = null;
+$("#btnSimRun").onclick = async () => {
+  await loadRules();
+  const r = CombatSim.run({ attackers: SIM.A, blockers: SIM.D, lifeA: SIM.lifeA, lifeD: SIM.lifeD });
+  lastSim = r;
+  const cite = t => ruleHTML(t).replace(/\[([\d.,\s–a-z]+)\]/g, (m, inner) => "[" + inner.replace(/\b(\d{3}(?:\.\d+[a-z]?)?)\b/g, n => ruleIndex && ruleIndex.has(n) ? `<button class="rref" data-rule="${n}">${n}</button>` : n) + "]");
+  if (r.problems.length) { $("#simOut").innerHTML = `<div class="panel"><h3>These blocks aren't allowed</h3>${r.problems.map(p => `<p>${cite(p)}</p>`).join("")}</div>`; return; }
+  const res = r.result;
+  $("#simOut").innerHTML = r.steps.map(st => `<div class="simstep panel"><h3>${esc(st.title)} <span class="small muted">rule ${cite(st.rule)}</span></h3>${st.lines.map(l => `<p>${cite(l)}</p>`).join("")}</div>`).join("") +
+    `<div class="simres"><b>Result</b><br>Attacking player: ${res.lifeA} life · Defending player: ${res.lifeD} life${res.loser ? ` · <b>${res.loser === "D" ? "the defending" : "the attacking"} player loses</b>` : ""}<br>Destroyed: ${esc(res.died.join(", ") || "none")}<br>Survived: ${esc(res.survived.join(", ") || "none")}</div>
+    <p class="small muted" style="margin-top:8px">Covers combat keywords only. Other abilities (triggers like “whenever … deals combat damage”, pump spells, protection) aren't included${apiKey() ? ": ask Claude to check them." : "."}</p>
+    ${apiKey() ? `<button id="btnSimClaude">Explain with Claude (includes the cards' other abilities)</button><div id="simClaude"></div>` : ""}`;
+  const cb = $("#btnSimClaude"); if (cb) cb.onclick = simAskClaude;
+};
+async function simAskClaude() {
+  const b = $("#btnSimClaude"); b.disabled = true; b.textContent = "Asking…";
+  const desc = c => { const ci = info(c.name) || {}; return `${c.name} (${c.power}/${c.toughness}${c.base && (c.base[0] !== c.power || c.base[1] !== c.toughness) ? `, printed ${c.base[0]}/${c.base[1]}` : ""}; keywords used: ${c.kw.join(", ") || "none"})\nOracle: ${ci.c || ""} ${ci.t || ""}\n${ci.o || ""}`; };
+  const att = SIM.A.map(desc).join("\n\n"), def = SIM.D.map(c => desc(c) + `\nBlocks: ${c.blocks ? (SIM.A.find(a => a.id === c.blocks) || {}).name : "nothing"}`).join("\n\n");
+  const log = lastSim ? lastSim.steps.map(s => s.title + ":\n" + s.lines.join("\n")).join("\n\n") : "";
+  const rel = relevantRules("combat damage first strike trample deathtouch lifelink blocking " + SIM.A.concat(SIM.D).flatMap(c => c.kw).join(" "), 25);
+  const prompt = `You are an experienced Magic: The Gathering judge. Check and explain this combat.
+Attacking player life ${SIM.lifeA}, defending player life ${SIM.lifeD}.
+
+ATTACKERS:
+${att}
+
+DEFENDERS:
+${def || "none"}
+
+A keyword-only simulator produced this result:
+${log}
+
+Tasks: 1) Say whether the simulator's result is right. 2) Point out any other abilities in the Oracle text above that change the outcome (triggers, static abilities, protection, etc.) and give the corrected result step by step. 3) Mention choices a player could make differently (e.g. how to divide damage among several blockers). Cite rule numbers in square brackets like [510.1c]. Keep it under 300 words. Plain text.
+
+RULES EXCERPTS:
+${rel.rules.map(r => `${r[0]} ${r[1]}`).join("\n")}`;
+  try {
+    const a = await askClaude(prompt, 1500);
+    $("#simClaude").innerHTML = `<div class="answer" style="margin-top:8px">${esc(a).replace(/\[(\d{3}(?:\.\d+[a-z]?)?)\]/g, (m, n) => ruleIndex.has(n) ? `<button class="rref" data-rule="${n}">${n}</button>` : m)}</div>`;
+  } catch (e) { $("#simClaude").innerHTML = `<p class="err">${esc(claudeErr(e).replace("build the deck", "answer"))}</p>`; }
+  finally { b.disabled = false; b.textContent = "Explain with Claude (includes the cards' other abilities)"; }
+}
 
 /* ---------- WISHLIST ----------
    S.wish: [{ name, qty, set ("SOS:178", "SOA:" or ""), foil, added }]. Stored on the phone; prices from the price list. */

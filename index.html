@@ -110,6 +110,8 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .badge.own{color:var(--accent);text-transform:none}
 .wishbtn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
 .hdrbtn{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;font-size:.85rem;margin-left:8px}
+header.top h1{white-space:nowrap}
+@media (max-width:440px){ .hdrbtn span{display:none} .hdrbtn{padding:6px 8px;margin-left:4px} }
 .rule{padding:10px 12px;border-top:1px solid var(--line)}
 .rule:first-child{border-top:0}
 .rule .rn{font-family:var(--mono);font-size:.8rem;color:var(--accent);margin-right:6px;font-weight:600}
@@ -118,6 +120,17 @@ button.nm{all:unset;font-weight:700;cursor:pointer;min-width:0;overflow-wrap:any
 .rule .ex b{font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
 .rule.hit{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .rref{all:unset;cursor:pointer;color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px;font-family:var(--mono);font-size:.92em}
+.simc{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.simc .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.simc .pt{display:flex;align-items:center;gap:4px;font-family:var(--mono)}
+.simc .pt button{min-width:30px;min-height:30px;padding:0}
+.kws{display:flex;flex-wrap:wrap;gap:4px}
+.kws button{font-size:.72rem;padding:3px 7px;min-height:0;border-radius:12px;color:var(--muted)}
+.kws button[aria-pressed="true"]{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.simstep{margin-top:10px}
+.simstep h3{margin:0 0 4px}
+.simstep p{margin:2px 0;line-height:1.45}
+.simres{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--accent-soft)}
 .rules-sec summary{padding:10px 12px;cursor:pointer;font-weight:700}
 .rules-sub{display:block;width:100%;text-align:left;padding:8px 12px 8px 22px;border:0;border-top:1px solid var(--line);background:none;color:var(--ink);font:inherit;cursor:pointer}
 .rules-sub .rn{font-family:var(--mono);color:var(--muted);margin-right:8px}
@@ -371,6 +384,12 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
         <h2>Game rules</h2>
         <span class="small muted" id="rulesVersion"></span>
       </div>
+      <div class="seg" id="rulesSeg" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <button data-rmode="rules" aria-pressed="true">Rules<small>search and read</small></button>
+        <button data-rmode="sim" aria-pressed="false">Combat simulator<small>what happens if…</small></button>
+      </div>
+    </div>
+    <div class="stack" id="rulesMain" style="margin-top:12px">
       <input type="search" id="rulesSearch" placeholder="Search, e.g. trample, deathtouch, first strike" autocomplete="off" aria-label="Search the rules">
       <details class="panel" id="rulesAskBox">
         <summary><b>Ask a rules question</b> <span class="small muted">(Claude, with your API key)</span></summary>
@@ -382,6 +401,23 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
       </details>
     </div>
     <div id="rulesBody"></div>
+    <div class="stack" id="simMain" hidden style="margin-top:12px">
+      <p class="small muted">Set up a combat and see what happens, step by step, with the rules cited. Keywords are read from each card; tap them to change, and use − / + for pump effects.</p>
+      <div class="panel stack" style="gap:8px">
+        <div class="row" style="justify-content:space-between"><h3>Attacking player</h3><div class="row" style="gap:6px"><span class="small muted">Life</span><div class="stepper"><button data-life="A-">−</button><span id="simLifeA">20</span><button data-life="A+">+</button></div></div></div>
+        <div class="row" style="flex-wrap:nowrap"><input type="text" id="simAddA" placeholder="Add an attacking creature" autocomplete="off" autocapitalize="words" style="flex:1;min-width:0"></div>
+        <div class="sugg" id="simSuggA"></div>
+        <div id="simListA"></div>
+      </div>
+      <div class="panel stack" style="gap:8px">
+        <div class="row" style="justify-content:space-between"><h3>Defending player</h3><div class="row" style="gap:6px"><span class="small muted">Life</span><div class="stepper"><button data-life="D-">−</button><span id="simLifeD">20</span><button data-life="D+">+</button></div></div></div>
+        <div class="row" style="flex-wrap:nowrap"><input type="text" id="simAddD" placeholder="Add a creature that can block" autocomplete="off" autocapitalize="words" style="flex:1;min-width:0"></div>
+        <div class="sugg" id="simSuggD"></div>
+        <div id="simListD"></div>
+      </div>
+      <div class="row"><button class="primary" id="btnSimRun" style="flex:1">Resolve combat</button><button class="ghost" id="btnSimClear">Clear</button></div>
+      <div id="simOut"></div>
+    </div>
   </section>
 
   <section class="pane" id="pane-wish" hidden>
@@ -535,6 +571,7 @@ input.deckname{font-family:var(--display);font-weight:700;font-size:1.3rem;paddi
 <script src="cards.js"></script>
 <script src="scan-grid.js"></script>
 <script src="scan-set.js"></script>
+<script src="sim.js"></script>
 <script src="builder.js"></script>
 <script src="app.js"></script>
 </body>
