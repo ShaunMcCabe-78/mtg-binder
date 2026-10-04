@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-const APP_VERSION = "1.12.0";
+const APP_VERSION = "1.12.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const keyOf = n => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -1265,7 +1265,9 @@ function renderSettings() {
 const DATA_BUILT = { cards: "2026-10-02", prints: "2026-10-03" };
 (() => { const seen = lsGet("mtg.versionSeen", null); if (!seen || seen.v !== APP_VERSION) lsSet("mtg.versionSeen", { v: APP_VERSION, at: Date.now() }); })();
 const dateText = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-const ago = t => { const d = Math.floor((Date.now() - t) / DAY); return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 60 ? `${d} days ago` : `${Math.round(d / 30)} months ago`; };
+// Calendar days, not 24-hour periods: last night is "yesterday".
+const dayStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const ago = t => { const d = Math.round((dayStart(Date.now()) - dayStart(t)) / DAY); return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 60 ? `${d} days ago` : `${Math.round(d / 30)} months ago`; };
 const freshness = (t, staleDays) => t ? `${dateText(t)} <span class="${Date.now() - t > staleDays * DAY ? "stale" : "fresh"}">(${ago(t)})</span>` : '<span class="stale">never</span>';
 function renderDbInfo() {
   const meta = lsGet("mtg.namesChecked", null), seen = lsGet("mtg.versionSeen", null);
@@ -1274,9 +1276,11 @@ function renderDbInfo() {
   const extraPrintCount = Object.values(extraPrints).reduce((a, l) => a + l.length, 0);
   $("#dbInfo").innerHTML =
     `<dt>App version</dt><dd>${esc(APP_VERSION)}${seen ? ` · on this phone since ${dateText(seen.at)}` : ""}</dd>` +
-    `<dt>Card list</dt><dd>${(DB.size + extra).toLocaleString()} cards · built ${freshness(Date.parse(DATA_BUILT.cards), 120)}</dd>` +
+    // The card list is as current as the newer of: the list built into the app, or your last "Check for new cards".
+    `<dt>Card list</dt><dd>${(DB.size + extra).toLocaleString()} cards · up to date as of ${freshness(Math.max(Date.parse(DATA_BUILT.cards), meta || 0), 30)}` +
+      `<br><span class="small muted">${DB.size.toLocaleString()} built into the app (${dateText(Date.parse(DATA_BUILT.cards))})${extra ? ` + ${extra.toLocaleString()} new from Scryfall` : ""}</span></dd>` +
     `<dt>Set list</dt><dd>${PRINTS ? `${Object.keys(PRINTS.s).length} sets · built ${freshness(Date.parse(DATA_BUILT.prints), 120)}` : "loads on first use"}${newest ? `<br><span class="small muted">Newest: ${esc(newest[1][0])} (${esc(newest[0])}, ${dateText(Date.parse(newest[1][1]))})</span>` : ""}${extraPrintCount ? `<br><span class="small muted">+ ${extraPrintCount} newer printings from Scryfall</span>` : ""}</dd>` +
-    `<dt>New cards check</dt><dd>${freshness(meta, 30)}${extra ? ` · ${extra.toLocaleString()} names added` : ""}</dd>` +
+    `<dt>New cards check</dt><dd>${freshness(meta, 30)}</dd>` +
     `<dt>Prices</dt><dd>${freshness(PRICES.at || null, 2)}</dd>`;
   if (!PRINTS) loadPrints().then(p => { if (p && !$("#pane-set").hidden) renderDbInfo(); });
 }
@@ -1354,7 +1358,7 @@ $("#btnUpdateNames").onclick = async () => {
 $("#btnPrices").onclick = async () => {
   const b = $("#btnPrices"); if (!navigator.onLine) { toast("Prices need internet"); return; }
   b.disabled = true; b.textContent = "Updating…";
-  await updatePrices(true); b.disabled = false; b.textContent = "Update prices now"; renderPriceInfo(); toast("Prices updated");
+  await updatePrices(true); b.disabled = false; b.textContent = "Update prices now"; renderPriceInfo(); renderDbInfo(); toast("Prices updated");
 };
 $("#btnBackup").onclick = () => copyText(collText("all", true) + S.wl.order.filter(id => S.wl.lists[id].items.length).map(id => `\n\n# Wishlist: ${S.wl.lists[id].name}\n` + S.wl.lists[id].items.map(wishLine).join("\n")).join(""));
 $("#btnReset").onclick = () => $("#resetConfirm").hidden = false;
