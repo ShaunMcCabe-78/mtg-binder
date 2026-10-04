@@ -1,0 +1,27 @@
+# Keeps rules.json (the Comprehensive Rules, from Wizards of the Coast) up to date: weekly, on demand,
+# and when the script changes. Commits only when the rules text actually changed.
+name: Update Comprehensive Rules
+on:
+  schedule:
+    - cron: "17 4 * * 1"        # Mondays 04:17 UTC
+  workflow_dispatch:
+  push:
+    paths: [scripts/build_rules.py, .github/workflows/rules.yml]
+permissions:
+  contents: write
+concurrency: rules
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/build_rules.py
+      - name: Commit if the rules changed
+        run: |
+          if [ -z "$(git status --porcelain rules.json)" ]; then echo "No change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rules.json
+          git commit -m "Update Comprehensive Rules"
+          git pull --rebase
+          git push

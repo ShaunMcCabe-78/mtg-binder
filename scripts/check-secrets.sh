@@ -17,12 +17,12 @@ else GREP=(git grep -I -n -E); FILES=$(git ls-files); fi
 KEYS='sk-ant-[A-Za-z0-9_-]{20,}|sk-(proj-)?[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 # "password = '...'"-style lines; not in the card data files, where card names like "... Secret" are normal.
 ASSIGN='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"'[:space:]]{12,}["'"'"']'
-hits=$( { "${GREP[@]}" "$KEYS" -- . ':!scripts/check-secrets.sh'; "${GREP[@]}" -i "$ASSIGN" -- . ':!scripts/check-secrets.sh' ':!cards.json' ':!prints.json'; } 2>/dev/null | cut -c1-160)
+hits=$( { "${GREP[@]}" "$KEYS" -- . ':!scripts/check-secrets.sh'; "${GREP[@]}" -i "$ASSIGN" -- . ':!scripts/check-secrets.sh' ':!cards.json' ':!prints.json' ':!rules.json'; } 2>/dev/null | cut -c1-160)
 [ -n "$hits" ] && report "Possible key or password:"$'\n'"$hits"
 
 # 2. Email addresses in files
-ALLOWED_EMAIL='noreply@anthropic\.com|[0-9]+\+[A-Za-z0-9-]+@users\.noreply\.github\.com'
-hits=$("${GREP[@]}" -o '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- . ':!scripts/check-secrets.sh' ':!cards.json' ':!prints.json' 2>/dev/null | grep -Ev "($ALLOWED_EMAIL)\$" | grep -Ev '@[0-9]+\.[0-9]+' )
+ALLOWED_EMAIL='noreply@anthropic\.com|[0-9]+\+[A-Za-z0-9-]+(\[bot\])?@users\.noreply\.github\.com'
+hits=$("${GREP[@]}" -o '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- . ':!scripts/check-secrets.sh' ':!cards.json' ':!prints.json' ':!rules.json' 2>/dev/null | grep -Ev "($ALLOWED_EMAIL)\$" | grep -Ev '@[0-9]+\.[0-9]+' )
 [ -n "$hits" ] && report "Email address in a file:"$'\n'"$hits"
 
 # ... and in commit details
